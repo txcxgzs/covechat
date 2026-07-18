@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod event_bus;
 mod object_store;
 mod persistence;
 mod rate_limit;
@@ -24,6 +25,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use event_bus::EventBus;
 use object_store::ObjectStore;
 use persistence::Persistence;
 use rate_limit::RateLimiter;
@@ -42,7 +44,7 @@ const MAX_BACKUP_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Clone)]
 struct AppState {
     inner: Arc<Mutex<Store>>,
-    events: broadcast::Sender<String>,
+    events: EventBus,
     persistence: Option<Persistence>,
     object_store: Option<ObjectStore>,
     rate_limiter: Option<RateLimiter>,
@@ -327,7 +329,14 @@ async fn main() {
     } else {
         tracing::warn!("REDIS_URL is unset; distributed rate limiting is disabled");
     }
-    let (events, _) = broadcast::channel(1024);
+    let events = EventBus::connect_from_env()
+        .await
+        .expect("initialize mailbox event bus");
+    if events.distributed() {
+        tracing::info!("Redis cross-instance mailbox events enabled");
+    } else {
+        tracing::warn!("REDIS_URL is unset; mailbox events are process-local");
+    }
     let state = AppState {
         inner: Arc::new(Mutex::new(store)),
         events,
@@ -1014,7 +1023,9 @@ async fn store_envelope(
         tracing::error!(error = %error, "persist envelope");
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
-    let _ = state.events.send(recipient.to_string());
+    if let Err(error) = state.events.publish(recipient).await {
+        tracing::error!(error = %error, "publish mailbox event");
+    }
     StatusCode::ACCEPTED
 }
 
@@ -1811,10 +1822,9 @@ mod tests {
                 expires_at: unix_now() + 60,
             },
         );
-        let (events, _) = broadcast::channel(8);
         let state = AppState {
             inner: Arc::new(Mutex::new(store)),
-            events,
+            events: EventBus::local(),
             persistence: None,
             object_store: None,
             rate_limiter: None,

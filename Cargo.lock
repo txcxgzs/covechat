@@ -833,6 +833,7 @@ dependencies = [
  "axum",
  "base64",
  "ed25519-dalek",
+ "futures-util",
  "getrandom 0.3.4",
  "redis",
  "serde",
