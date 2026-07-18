@@ -4,7 +4,7 @@ import {
   LockKeyhole, Menu, MessageCircle, Paperclip, Plus, Search, Send,
   Languages, Settings, ShieldCheck, Smile, Trash2, UserRound, UsersRound, X
 } from "lucide-react";
-import { getConversations, getSeedMessages, type Message } from "./data";
+import type { Conversation, Message } from "./data";
 import { copy, detectLocale, type Locale, type Translate } from "./i18n";
 import { SecurityGate } from "./security/SecurityGate";
 import type { SecureProfile } from "./security/vault";
@@ -20,6 +20,7 @@ import {
 import { identityVerification, markIdentityVerified } from "./security/trust";
 import {
   appendConversationHistory,
+  listConversationHistories,
   loadConversationHistory,
 } from "./security/history";
 import { syncEncryptedBackup } from "./security/backup";
@@ -80,9 +81,25 @@ function Navigation({ locale, t, onLocaleChange, profileName, activeView, onView
   );
 }
 
-function ConversationList({ locale, t }: { locale: Locale; t: Translate }) {
+function ConversationList({ historyRevision, locale, onSelect, profile, recipient, t }: {
+  historyRevision: number;
+  locale: Locale;
+  onSelect: (username: string) => void;
+  profile: SecureProfile;
+  recipient: string;
+  t: Translate;
+}) {
   const [query, setQuery] = useState("");
-  const conversations = useMemo(() => getConversations(locale), [locale]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  useEffect(() => {
+    void listConversationHistories(profile).then((items) => setConversations(items.map(({ username, latest }) => ({
+      id: username,
+      name: username,
+      initials: username.slice(0, 2).toUpperCase(),
+      preview: latest?.body ?? (latest?.attachment ? `🔒 ${latest.attachment.fileName}` : ""),
+      time: latest ? new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(new Date(latest.createdAt)) : "",
+    }))));
+  }, [historyRevision, locale, profile, recipient]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return normalized
@@ -94,16 +111,16 @@ function ConversationList({ locale, t }: { locale: Locale; t: Translate }) {
     <aside className="conversations">
       <div className="section-heading">
         <div><span className="eyeline">{t("privateWorkspace")}</span><h1>{t("messages")}</h1></div>
-        <button className="icon-button" aria-label={t("newConversation")}><Plus /></button>
+        <button className="icon-button" aria-label={t("newConversation")} onClick={() => onSelect("")}><Plus /></button>
       </div>
-      <button className="new-button"><Plus />{t("newConversation")}</button>
+      <button className="new-button" onClick={() => onSelect("")}><Plus />{t("newConversation")}</button>
       <label className="search">
         <Search aria-hidden="true" />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("searchConversations")} />
       </label>
       <div className="conversation-scroll">
         {filtered.map((item) => (
-          <button className={item.id === "maya" ? "conversation selected" : "conversation"} key={item.id}>
+          <button className={item.id === recipient ? "conversation selected" : "conversation"} key={item.id} onClick={() => onSelect(item.id)}>
             <span className="avatar">{item.initials}</span>
             <span className="conversation-copy">
               <span className="conversation-line"><strong>{item.name}</strong><time>{item.time}</time></span>
@@ -195,7 +212,7 @@ function Composer({ onSend, onAttachment, t }: {
   );
 }
 
-function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, recipient, session, t }: {
+function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientChange, profile, recipient, session, t }: {
   locale: Locale;
   onDetails: () => void;
   profile: SecureProfile;
@@ -204,10 +221,12 @@ function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, r
   recipient: string;
   onRecipientChange: (recipient: string) => void;
   onReceivedText: (text: string) => void;
+  onHistoryChange: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [attachments, setAttachments] = useState<AttachmentReference[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState("");
+  const [disappearAfter, setDisappearAfter] = useState(0);
   useEffect(() => {
     if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
       setMessages([]);
@@ -224,10 +243,20 @@ function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, r
           minute: "2-digit",
         }).format(new Date(item.createdAt)),
         delivered: true,
+        expiresAt: item.expiresAt,
       })));
       setAttachments(history.flatMap((item) => item.attachment ? [item.attachment] : []));
     });
   }, [locale, profile, recipient]);
+  useEffect(() => {
+    const prune = () => {
+      const now = Date.now();
+      setMessages((current) => current.filter((message) => !message.expiresAt || message.expiresAt > now));
+      setAttachments((current) => current.filter((attachment) => attachment.expiresAt * 1000 > now));
+    };
+    const timer = window.setInterval(prune, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => {
     let active = true;
     async function refresh() {
@@ -240,8 +269,10 @@ function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, r
           body: message.body,
           attachment: message.attachment,
           createdAt: message.createdAt,
+          expiresAt: message.expiresAt,
         });
       }
+      onHistoryChange();
       void syncEncryptedBackup(profile, session).catch(() => undefined);
       const visible = received.filter((message) => message.senderUsername === recipient);
       setMessages((current) => {
@@ -257,6 +288,7 @@ function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, r
               minute: "2-digit",
             }).format(new Date(message.createdAt)),
             delivered: true,
+            expiresAt: message.expiresAt,
           })),
         ];
       });
@@ -286,15 +318,18 @@ function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, r
       return;
     }
     try {
-      await sendEncryptedText(profile, session, recipient, text);
+      await sendEncryptedText(profile, session, recipient, text, disappearAfter || undefined);
       const id = crypto.randomUUID();
       const createdAt = Date.now();
+      const expiresAt = disappearAfter ? createdAt + disappearAfter * 1000 : undefined;
       await appendConversationHistory(profile, recipient, {
         id,
         from: "me",
         body: text,
         createdAt,
+        expiresAt,
       });
+      onHistoryChange();
       void syncEncryptedBackup(profile, session).catch(() => undefined);
       setMessages((current) => [...current, {
         id,
@@ -305,6 +340,7 @@ function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, r
           minute: "2-digit",
         }).format(new Date(createdAt)),
         delivered: true,
+        expiresAt,
       }]);
       setAttachmentStatus("");
     } catch (error) {
@@ -320,14 +356,17 @@ function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, r
     }
     setAttachmentStatus(t("attachmentUploading"));
     try {
-      const reference = await encryptAndUploadAttachment(file, session);
-      await sendEncryptedAttachment(profile, session, recipient, reference);
+      const attachmentExpiry = Math.floor(Date.now() / 1000) + (disappearAfter || 30 * 24 * 60 * 60);
+      const reference = await encryptAndUploadAttachment(file, session, attachmentExpiry);
+      await sendEncryptedAttachment(profile, session, recipient, reference, disappearAfter || undefined);
       await appendConversationHistory(profile, recipient, {
         id: crypto.randomUUID(),
         from: "me",
         attachment: reference,
         createdAt: Date.now(),
+        expiresAt: disappearAfter ? Date.now() + disappearAfter * 1000 : undefined,
       });
+      onHistoryChange();
       void syncEncryptedBackup(profile, session).catch(() => undefined);
       setAttachments((current) => [...current, reference]);
       setAttachmentStatus("");
@@ -356,6 +395,18 @@ function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, r
         recipient={recipient}
         t={t}
       />
+      <div className="disappearing-control">
+        <LockKeyhole />
+        <label>
+          {locale === "zh-CN" ? "定时消失" : "Disappearing messages"}
+          <select value={disappearAfter} onChange={(event) => setDisappearAfter(Number(event.target.value))}>
+            <option value={0}>{locale === "zh-CN" ? "关闭" : "Off"}</option>
+            <option value={3600}>{locale === "zh-CN" ? "1 小时" : "1 hour"}</option>
+            <option value={86400}>{locale === "zh-CN" ? "1 天" : "1 day"}</option>
+            <option value={604800}>{locale === "zh-CN" ? "7 天" : "7 days"}</option>
+          </select>
+        </label>
+      </div>
       <section className="messages" aria-label="Encrypted conversation" aria-live="polite">
         <div className="date-rule"><span>{t("today")}</span></div>
         {messages.map((message) => (
@@ -712,6 +763,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   const [activeView, setActiveView] = useState<"messages" | "groups">("messages");
   const [recipient, setRecipient] = useState("");
   const [lastReceivedText, setLastReceivedText] = useState<string>();
+  const [historyRevision, setHistoryRevision] = useState(0);
   useEffect(() => {
     localStorage.setItem("covechat.locale", locale);
     document.documentElement.lang = locale;
@@ -732,7 +784,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
         />
         {activeView === "messages" ? (
           <>
-            <ConversationList key={`conversations-${locale}`} locale={locale} t={t} />
+            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onSelect={setRecipient} profile={profile} recipient={recipient} t={t} />
             <Chat
               key={`chat-${locale}`}
               locale={locale}
@@ -741,6 +793,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
               session={session}
               onRecipientChange={setRecipient}
               onReceivedText={setLastReceivedText}
+              onHistoryChange={() => setHistoryRevision((current) => current + 1)}
               onDetails={() => setDetailsOpen(true)}
               t={t}
             />

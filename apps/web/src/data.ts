@@ -14,6 +14,7 @@ export type Message = {
   text: string;
   time: string;
   delivered?: boolean;
+  expiresAt?: number;
 };
 
 import type { Locale } from "./i18n";

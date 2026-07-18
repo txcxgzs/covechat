@@ -89,6 +89,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .empty { text-align: center; color: var(--muted); padding: 40px 20px; }
 .chat { min-width: 0; display: grid; grid-template-rows: 80px minmax(0, 1fr) auto; }
 .chat-header { border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 13px; padding: 0 22px; }
+.disappearing-control { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 5px 18px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.disappearing-control svg { width: 13px; }
+.disappearing-control label { display: flex; align-items: center; gap: 7px; }
+.disappearing-control select { border: 1px solid var(--line); border-radius: 6px; background: white; color: var(--ink); padding: 3px 6px; font-size: 10px; }
 .chat-title { display: grid; gap: 3px; }
 .chat-title strong { font-size: 16px; }
 .chat-title span, .security-person span { color: var(--teal); font-size: 12px; display: flex; align-items: center; gap: 5px; }

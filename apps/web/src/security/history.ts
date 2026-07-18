@@ -16,7 +16,15 @@ export async function loadConversationHistory(
   username: string,
 ): Promise<LocalHistoryItem[]> {
   const state = await loadTrustState(profile);
-  return state.history?.[normalizedUsername(username)] ?? [];
+  const key = normalizedUsername(username);
+  const history = state.history?.[key] ?? [];
+  const now = Date.now();
+  const active = history.filter((item) => !item.expiresAt || item.expiresAt > now);
+  if (active.length !== history.length && state.history) {
+    state.history[key] = active;
+    await saveTrustState(profile, state);
+  }
+  return active;
 }
 
 export async function appendConversationHistory(
@@ -29,9 +37,22 @@ export async function appendConversationHistory(
   const key = normalizedUsername(username);
   const history = state.history[key] ?? [];
   if (!history.some((existing) => existing.id === item.id)) {
-    history.push(item);
+    if (!item.expiresAt || item.expiresAt > Date.now()) history.push(item);
     history.sort((a, b) => a.createdAt - b.createdAt);
     state.history[key] = history;
     await saveTrustState(profile, state);
   }
+}
+
+export async function listConversationHistories(
+  profile: SecureProfile,
+): Promise<Array<{ username: string; latest?: LocalHistoryItem }>> {
+  const state = await loadTrustState(profile);
+  return Object.entries(state.history ?? {})
+    .map(([username, items]) => ({
+      username,
+      latest: items.filter((item) => !item.expiresAt || item.expiresAt > Date.now()).at(-1),
+    }))
+    .filter((conversation) => conversation.latest)
+    .sort((a, b) => (b.latest?.createdAt ?? 0) - (a.latest?.createdAt ?? 0));
 }

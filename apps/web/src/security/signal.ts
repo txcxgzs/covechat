@@ -48,6 +48,7 @@ export type DecryptedTextMessage = {
   body?: string;
   attachment?: AttachmentReference;
   createdAt: number;
+  expiresAt?: number;
 };
 
 function ensureCrypto() {
@@ -93,8 +94,8 @@ function parseBundle(directory: DirectoryResponse["devices"][number]): SignalPre
 }
 
 type SignalPayload =
-  | { version: 1; type: "text"; senderUsername: string; body: string; createdAt: number }
-  | { version: 1; type: "attachment"; senderUsername: string; attachment: AttachmentReference; createdAt: number };
+  | { version: 1; type: "text"; senderUsername: string; body: string; createdAt: number; expiresAt?: number }
+  | { version: 1; type: "attachment"; senderUsername: string; attachment: AttachmentReference; createdAt: number; expiresAt?: number };
 
 async function sendEncryptedPayload(
   profile: SecureProfile,
@@ -154,7 +155,9 @@ async function sendEncryptedPayload(
       recipientDeviceId: device.deviceId,
       conversationId: threadId,
       sequence: createdAt * 1000 + index,
-      expiresAt: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+      expiresAt: payload.expiresAt
+        ? Math.floor(payload.expiresAt / 1000)
+        : Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
       ciphertext: JSON.stringify({
         protocol: "signal-pqxdh-triple-ratchet",
         messageType: encrypted.messageType,
@@ -171,6 +174,7 @@ export async function sendEncryptedText(
   session: AuthSession,
   recipientUsername: string,
   body: string,
+  disappearAfterSeconds?: number,
 ): Promise<void> {
   const normalizedBody = body.trim();
   if (!normalizedBody) throw new Error("message must not be empty");
@@ -180,6 +184,7 @@ export async function sendEncryptedText(
     senderUsername: profile.username,
     body: normalizedBody,
     createdAt: Date.now(),
+    expiresAt: disappearAfterSeconds ? Date.now() + disappearAfterSeconds * 1000 : undefined,
   });
 }
 
@@ -188,6 +193,7 @@ export async function sendEncryptedAttachment(
   session: AuthSession,
   recipientUsername: string,
   attachment: AttachmentReference,
+  disappearAfterSeconds?: number,
 ): Promise<void> {
   if (
     attachment.protocolVersion !== 1
@@ -204,6 +210,7 @@ export async function sendEncryptedAttachment(
     senderUsername: profile.username,
     attachment,
     createdAt: Date.now(),
+    expiresAt: disappearAfterSeconds ? Date.now() + disappearAfterSeconds * 1000 : undefined,
   });
 }
 
@@ -238,6 +245,7 @@ export async function receiveEncryptedTexts(
       if (
         payload.version !== 1
         || !Number.isFinite(payload.createdAt)
+        || (payload.expiresAt !== undefined && (!Number.isFinite(payload.expiresAt) || payload.expiresAt <= payload.createdAt))
         || !/^[a-z0-9_]{3,32}$/u.test(payload.senderUsername)
         || (
           payload.type === "text"
@@ -264,6 +272,7 @@ export async function receiveEncryptedTexts(
       }
       void syncEncryptedBackup(profile, session).catch(() => undefined);
       await acknowledgeEnvelope(envelope.envelopeId, session);
+      if (payload.expiresAt && payload.expiresAt <= Date.now()) continue;
       messages.push({
         envelopeId: envelope.envelopeId,
         senderDeviceId: envelope.senderDeviceId,
@@ -271,6 +280,7 @@ export async function receiveEncryptedTexts(
         body: payload.type === "text" ? payload.body : undefined,
         attachment: payload.type === "attachment" ? payload.attachment : undefined,
         createdAt: payload.createdAt,
+        expiresAt: payload.expiresAt,
       });
     } catch {
       // Fail closed: keep the envelope queued for a future compatible client.
