@@ -62,6 +62,12 @@ export type MlsGroupMetadata = {
   name: string;
   epoch: number;
   memberDeviceIds: string[];
+  // 管理员设备列表。创建者默认为管理员；管理员可移除成员、切换邀请策略。
+  adminDeviceIds?: string[];
+  // 邀请策略：anyone=所有成员可邀请，admins=仅管理员可邀请。
+  invitePolicy?: "anyone" | "admins";
+  // deviceId → MLS leafIndex 映射。removeGroupMember 需要 leafIndex 定位成员。
+  memberLeafIndices?: Record<string, number>;
 };
 
 export type PublishedPreKeyBundle = {

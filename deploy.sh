@@ -66,13 +66,28 @@ random_secret() {
 if [[ ! -f .env ]]; then
   umask 077
   cat >.env <<EOF
+# CoveChat 部署配置（自动生成，权限 0600）
+# 反向代理上游监听地址（默认只监听本机回环，由宝塔/Nginx/Caddy 反代到公网）
 COVECHAT_HTTP_HOST=$HOST_ADDRESS
 COVECHAT_HTTP_PORT=$PORT
+
+# 基础设施随机强密码（请勿修改，除非同步轮换对应服务凭据）
 POSTGRES_PASSWORD=$(random_secret)
 MINIO_ROOT_USER=covechat
 MINIO_ROOT_PASSWORD=$(random_secret)
+
+# 第 6 轮新增：CSRF 纵深防御的 Origin 允许列表（逗号分隔，不含尾斜杠）。
+# 留空 = 开发模式放行所有 Origin（不安全，仅用于本地测试）。
+# 生产部署必须设置为实际公网域名，例如：
+#   ALLOWED_ORIGINS=https://chat.example.com
+#   ALLOWED_ORIGINS=https://chat.example.com,https://chat-backup.example.com
+ALLOWED_ORIGINS=
 EOF
   echo "Created .env with random infrastructure passwords."
+  echo ""
+  echo "⚠️  重要：编辑 .env 设置 ALLOWED_ORIGINS 为你的公网域名，"
+  echo "    否则 Origin 校验处于开发模式放行所有请求（不安全）。"
+  echo "    示例：ALLOWED_ORIGINS=https://chat.example.com"
 else
   echo "Using existing .env. Command-line host and port are ignored."
 fi
@@ -87,4 +102,12 @@ Reverse proxy upstream: $TARGET
 Status: docker compose --env-file .env -f compose.deploy.yml ps
 Logs:   docker compose --env-file .env -f compose.deploy.yml logs -f
 Stop:   docker compose --env-file .env -f compose.deploy.yml down
+
+部署后请跑验证脚本（推荐传入公网域名）：
+  chmod +x deploy/verify.sh
+  ./deploy/verify.sh --public-url https://chat.example.com
+
+⚠️  如果你还没有编辑 .env 设置 ALLOWED_ORIGINS，请先编辑再重建 API 容器：
+  vi .env  # 设置 ALLOWED_ORIGINS=https://你的域名
+  docker compose --env-file .env -f compose.deploy.yml up -d --force-recreate api
 EOF

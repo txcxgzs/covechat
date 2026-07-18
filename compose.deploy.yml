@@ -27,6 +27,10 @@ services:
       AWS_SECRET_ACCESS_KEY: "${MINIO_ROOT_PASSWORD}"
       AWS_EC2_METADATA_DISABLED: "true"
       RUST_LOG: covechat_api=info
+      # 第 6 轮新增：CSRF 纵深防御的 Origin 允许列表（逗号分隔）。
+      # 留空 = 开发模式放行所有；生产部署必须设置为实际域名，否则 Origin 校验失效。
+      # 示例：ALLOWED_ORIGINS=https://chat.example.com,https://chat-backup.example.com
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-}"
     expose: ["8080"]
     depends_on:
       postgres:

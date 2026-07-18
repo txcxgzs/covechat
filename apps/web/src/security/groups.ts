@@ -122,13 +122,56 @@ function updateMetadata(
     name: name?.trim() || "Encrypted group",
     epoch: result.epoch,
     memberDeviceIds: [],
+    adminDeviceIds: [],
+    invitePolicy: "admins",
+    memberLeafIndices: {},
   };
   metadata.epoch = result.epoch;
   metadata.memberDeviceIds = result.members.map((member) => memberDeviceId(member.identity));
+  // 同步 deviceId → leafIndex 映射，removeGroupMember 通过它定位成员。
+  metadata.memberLeafIndices = Object.fromEntries(
+    result.members.map((member) => [memberDeviceId(member.identity), member.leafIndex]),
+  );
   if (name?.trim()) metadata.name = name.trim();
   if (conversationId) metadata.conversationId = conversationId;
+  // 兼容旧数据：缺少可选字段时补默认值
+  metadata.adminDeviceIds ??= [];
+  metadata.invitePolicy ??= "admins";
+  metadata.memberLeafIndices ??= {};
   if (!existing) groups(profile).push(metadata);
   return metadata;
+}
+
+/// 判断当前设备是否为指定群的管理员。创建者默认是管理员。
+/// 用于 UI 决定是否显示移除成员、切换邀请策略等管理员操作。
+export function isGroupAdmin(profile: SecureProfile, groupId: string): boolean {
+  const metadata = groups(profile).find((group) => group.groupId === groupId);
+  if (!metadata) return false;
+  const admins = metadata.adminDeviceIds ?? [];
+  // 兼容旧数据：管理员列表为空时，视为创建者（第一个加入的设备）是管理员。
+  // 但本地无法可靠判断谁是创建者，故空列表时只有 memberDeviceIds[0] 视为管理员。
+  if (admins.length === 0) {
+    return metadata.memberDeviceIds[0] === profile.deviceId;
+  }
+  return admins.includes(profile.deviceId);
+}
+
+/// 切换群邀请策略。仅管理员可调用；非管理员调用抛错。
+/// anyone=所有成员可邀请；admins=仅管理员可邀请。
+export async function setGroupInvitePolicy(
+  profile: SecureProfile,
+  session: AuthSession,
+  groupId: string,
+  policy: "anyone" | "admins",
+): Promise<void> {
+  const metadata = groups(profile).find((group) => group.groupId === groupId);
+  if (!metadata) throw new Error("group not found");
+  if (!isGroupAdmin(profile, groupId)) {
+    throw new Error("only admins can change invite policy");
+  }
+  metadata.invitePolicy = policy;
+  await saveMlsState(profile);
+  void syncEncryptedBackup(profile, session).catch(() => undefined);
 }
 
 function parsePublishedBundle(
@@ -183,6 +226,9 @@ export async function createEncryptedGroup(
   )) as MlsGroupResult;
   profile.mls.state = result.state;
   const metadata = updateMetadata(profile, result, name, conversationId);
+  // 创建者默认为管理员，邀请策略默认为 admins（仅管理员可邀请）。
+  metadata.adminDeviceIds = [profile.deviceId];
+  metadata.invitePolicy = "admins";
   await saveMlsState(profile);
   void syncEncryptedBackup(profile, session).catch(() => undefined);
   return metadata;
@@ -197,6 +243,10 @@ export async function addGroupMember(
   await ensureCrypto();
   const metadata = groups(profile).find((group) => group.groupId === groupId);
   if (!metadata) throw new Error("group not found");
+  // 邀请策略校验：admins 策略下，非管理员拒绝邀请。
+  if ((metadata.invitePolicy ?? "admins") === "admins" && !isGroupAdmin(profile, groupId)) {
+    throw new Error("only admins can invite members");
+  }
   const directory = await lookupDirectory(username.trim().toLowerCase(), session);
   const devices = directory.devices.filter((device) => !device.revokedAt);
   if (metadata.memberDeviceIds.length + devices.length > 50) {
@@ -239,11 +289,24 @@ export async function removeGroupMember(
   profile: SecureProfile,
   session: AuthSession,
   groupId: string,
-  leafIndex: number,
+  memberDeviceId: string,
 ): Promise<MlsGroupMetadata> {
   await ensureCrypto();
   const metadata = groups(profile).find((group) => group.groupId === groupId);
   if (!metadata) throw new Error("group not found");
+  // 只有管理员可以移除成员。
+  if (!isGroupAdmin(profile, groupId)) {
+    throw new Error("only admins can remove members");
+  }
+  // 不允许移除自己（MLS 协议层也不允许 self-removal）。
+  if (memberDeviceId === profile.deviceId) {
+    throw new Error("cannot remove yourself; use leave group instead");
+  }
+  // 通过 deviceId 查 leafIndex；若映射缺失则降级报错，避免误删。
+  const leafIndex = metadata.memberLeafIndices?.[memberDeviceId];
+  if (leafIndex === undefined) {
+    throw new Error("member leaf index not found; sync mailbox and retry");
+  }
   const previousMembers = [...metadata.memberDeviceIds];
   const result = JSON.parse(wasm_mls_remove_member(
     JSON.stringify(profile.mls.state),
@@ -252,6 +315,10 @@ export async function removeGroupMember(
   )) as MlsCommitResult;
   profile.mls.state = result.state;
   updateMetadata(profile, result);
+  // 被移除的成员从管理员列表中剔除（若存在）。
+  metadata.adminDeviceIds = (metadata.adminDeviceIds ?? []).filter(
+    (id) => id !== memberDeviceId,
+  );
   await saveMlsState(profile);
   void syncEncryptedBackup(profile, session).catch(() => undefined);
   await deliver(profile, session, metadata, previousMembers, {

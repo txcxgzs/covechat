@@ -19,3 +19,27 @@ contact a project maintainer privately.
 - Unknown protocol versions and invalid signatures are rejected.
 - Server-side loss of availability must not become loss of confidentiality.
 - A key change pauses sending until the user acknowledges it.
+
+## Production deployment requirements
+
+- **`ALLOWED_ORIGINS` must be set** to the public origin(s) served to users.
+  An empty value means development mode: the `require_origin` middleware and
+  the WebSocket `Origin` check pass through all requests and the API logs a
+  warning. Running production with an empty allow-list disables the CSRF
+  defence in depth.
+- **`REDIS_URL` must be set** for distributed rate limiting and cross-instance
+  mailbox events. Without Redis the rate limiter degrades to pass-through
+  (abuse endpoints are unguarded) and mailbox events are process-local only
+  (multi-instance WebSocket fan-out does not work).
+- **`DATABASE_URL` must be set** for durable persistence. Without it the API
+  starts in ephemeral development mode and loses all state on restart.
+- **`S3_ENDPOINT` should be set** (deployment default: MinIO) so attachment
+  ciphertext is stored in object storage rather than the PostgreSQL fallback.
+- **Do not expose** PostgreSQL, Redis, MinIO or the API port directly to the
+  public internet. Only the web container (port 8088) should be exposed, and
+  only through a reverse proxy providing TLS.
+- **Reverse proxy must forward WebSocket** (`Upgrade` / `Connection` headers)
+  and preserve `X-Forwarded-For` so IP-based rate limiting works.
+
+The `deploy/verify.sh` script checks these requirements post-deployment; run it
+with `--public-url https://your.domain` before accepting production traffic.

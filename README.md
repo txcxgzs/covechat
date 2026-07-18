@@ -44,6 +44,131 @@ http://127.0.0.1:8088
 `http://127.0.0.1:8088`。不要将 API、PostgreSQL、Redis 或 MinIO
 端口直接暴露到公网。示例见 [deploy/Caddyfile.example](deploy/Caddyfile.example)。
 
+### 配置 Origin 允许列表（重要）
+
+`deploy.sh` 生成的 `.env` 默认 `ALLOWED_ORIGINS=` 为空，表示开发模式放行所有
+Origin（不安全）。**生产部署必须**编辑 `.env`，把公网域名填上：
+
+```bash
+vi .env
+# 修改这一行（多个域名用逗号分隔，不含尾斜杠）：
+# ALLOWED_ORIGINS=https://chat.example.com
+```
+
+保存后重建 API 容器使配置生效：
+
+```bash
+docker compose --env-file .env -f compose.deploy.yml up -d --force-recreate api
+```
+
+留空时服务端会打印 `Origin checks are disabled (development mode)` 警告。
+
+### 部署后验证（在 Linux 服务器上跑）
+
+`deploy/verify.sh` 一键验证 8 项：服务状态、PostgreSQL 迁移表、Redis 连通、
+MinIO 健康、API `/health`、Web `/healthz`、反向代理、Origin 校验。
+
+```bash
+chmod +x deploy/verify.sh
+
+# 只验证容器内部（不验反代、不验 Origin）
+./deploy/verify.sh
+
+# 同时验证反向代理和 Origin 校验（推荐，传入你的公网域名）
+./deploy/verify.sh --public-url https://chat.example.com
+```
+
+退出码 `0` = 全部通过；`1` = 至少一项失败，按输出排查。
+
+### 宝塔面板部署（小白推荐）
+
+如果你用宝塔面板（BT Panel），按以下步骤操作（每一步都要做完）：
+
+1. **登录宝塔面板**：浏览器打开 `http://你的服务器IP:8888`（宝塔默认端口）。
+
+2. **安装 Docker 管理器**：
+   - 左侧菜单 → 软件商店 → 搜索 `Docker管理器` → 点 `安装`。
+   - 等待安装完成（约 1-3 分钟）。安装后左侧菜单会多出 `Docker` 项。
+
+3. **拉取 CoveChat 代码**：
+   - 左侧菜单 → 终端 → 执行：
+     ```bash
+     cd /www/wwwroot
+     git clone https://github.com/txcxgzs/covechat.git
+     cd covechat
+     ```
+   - 如果没装 git：`yum install -y git`（CentOS）或 `apt install -y git`（Ubuntu/Debian）。
+
+4. **首次部署**：
+   - 终端继续执行：
+     ```bash
+     chmod +x deploy.sh
+     ./deploy.sh
+     ```
+   - 脚本会自动生成 `.env`（权限 0600，含随机强密码）并启动 5 个容器。
+
+5. **配置 Origin 允许列表**（关键安全步骤）：
+   - 终端执行 `vi .env`，找到 `ALLOWED_ORIGINS=` 这一行，改成你的域名：
+     ```
+     ALLOWED_ORIGINS=https://chat.你的域名.com
+     ```
+   - 按 `i` 进入插入模式编辑，按 `Esc` 后输入 `:wq` 保存退出。
+   - 重建 API 容器：
+     ```bash
+     docker compose --env-file .env -f compose.deploy.yml up -d --force-recreate api
+     ```
+
+6. **在宝塔配置反向代理**（让公网通过 HTTPS 访问）：
+   - 左侧菜单 → 网站 → 添加站点：
+     - 域名：`chat.你的域名.com`
+     - 根目录：任意（反代不读根目录）
+     - PHP版本：纯静态
+     - 点 `提交`。
+   - 进入站点设置 → 反向代理：
+     - 点 `添加反向代理`：
+       - 代理名称：`covechat`
+       - 目标URL：`http://127.0.0.1:8088`
+       - 发送域名：`$host`
+       - 勾选 `启用代理`，点 `提交`。
+   - 进入站点设置 → SSL：
+     - 选 `Let's Encrypt`，勾选你的域名，点 `申请`。
+     - 申请成功后勾选 `强制HTTPS`。
+   - **WebSocket 支持**：宝塔默认反代配置不含 WebSocket 升级头。进入站点设置 → 配置文件，在 `location /` 块内加三行：
+     ```nginx
+     proxy_http_version 1.1;
+     proxy_set_header Upgrade $http_upgrade;
+     proxy_set_header Connection "upgrade";
+     ```
+     保存并重启 Nginx。
+
+7. **跑部署验证脚本**：
+   - 终端执行：
+     ```bash
+     cd /www/wwwroot/covechat
+     chmod +x deploy/verify.sh
+     ./deploy/verify.sh --public-url https://chat.你的域名.com
+     ```
+   - 看到 `部署验证全部通过！CoveChat 已就绪。` 即完成。
+
+8. **日常维护命令**（终端执行）：
+   ```bash
+   cd /www/wwwroot/covechat
+   # 查看服务状态
+   docker compose --env-file .env -f compose.deploy.yml ps
+   # 查看实时日志
+   docker compose --env-file .env -f compose.deploy.yml logs -f
+   # 停止服务
+   docker compose --env-file .env -f compose.deploy.yml down
+   # 更新代码并重新部署
+   git pull && ./deploy.sh
+   ```
+
+常见问题：
+
+- 反代后 WebSocket 连不上 → 第 6 步的三个 upgrade 头没加。
+- `verify.sh` 报 `Origin 校验处于开发模式放行所有` → 第 5 步 `.env` 没改或没重建 api 容器。
+- 容器启动失败 → 看 `docker compose logs` 找原因，常见是端口被占用（改 `.env` 里的 `COVECHAT_HTTP_PORT`）。
+
 ## Windows 一键部署
 
 安装并启动 Docker Desktop 后，在 PowerShell 中运行：
@@ -57,6 +182,8 @@ http://127.0.0.1:8088
 ```powershell
 .\deploy.ps1 -Port 9000
 ```
+
+Windows 部署同样需要在 `.env` 中设置 `ALLOWED_ORIGINS`（生产域名），留空 = 开发模式。
 
 常用维护命令：
 

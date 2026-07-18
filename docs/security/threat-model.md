@@ -14,6 +14,10 @@ state, recovery secrets, local history and cloud backups.
 - Temporary compromise of session state, followed by an uncompromised ratchet.
 - Malicious group members before removal and attempts to read later epochs.
 - Web supply-chain attacks, XSS and stale/malicious service workers.
+- Cross-site request forgery (CSRF) attempts against state-changing endpoints.
+- Abuse of registration, authentication, recovery and directory lookup endpoints
+  for batch account creation, login bombing, recovery-code brute force and
+  username enumeration.
 
 ## Explicitly out of scope
 
@@ -31,6 +35,15 @@ state, recovery secrets, local history and cloud backups.
 5. Removing a group member advances the MLS epoch before further application messages.
 6. Backup versions form a client-verified hash chain to detect rollback.
 7. Logs contain random request IDs and coarse outcomes only.
+8. State-changing requests (`POST`/`PUT`/`DELETE`) and WebSocket upgrades are
+   gated by an `Origin` allow-list (`ALLOWED_ORIGINS`). An empty list means
+   development mode and logs a warning; production deployments must set it.
+9. Anonymous endpoints (onboarding, auth challenge, recovery challenge) and
+   authenticated directory lookups are rate-limited per IP via Redis. Without
+   Redis the limiter degrades to pass-through and logs a warning.
+10. A background cleanup task evicts expired envelopes, attachments, challenges,
+    sessions and idempotency keys; S3 ciphertext is deleted outside the store
+    lock.
 
 ## Current 0.1 limitation
 

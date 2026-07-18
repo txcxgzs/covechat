@@ -7,7 +7,7 @@ import {
 import type { Conversation, Message } from "./data";
 import { copy, detectLocale, type Locale, type Translate } from "./i18n";
 import { SecurityGate } from "./security/SecurityGate";
-import type { SecureProfile } from "./security/vault";
+import { saveMlsState, type SecureProfile } from "./security/vault";
 import type { AttachmentReference, AuthSession, DeviceRecord } from "@covechat/protocol";
 import {
   listBlockedUsers,
@@ -27,13 +27,17 @@ import { syncEncryptedBackup } from "./security/backup";
 import {
   downloadAndDecryptAttachment,
   encryptAndUploadAttachment,
+  MAX_ATTACHMENT_SIZE,
 } from "./security/attachments";
 import {
   addGroupMember,
   createEncryptedGroup,
+  isGroupAdmin,
   listEncryptedGroups,
   receiveEncryptedGroupMessages,
+  removeGroupMember,
   sendEncryptedGroupText,
+  setGroupInvitePolicy,
 } from "./security/groups";
 import {
   receiveEncryptedTexts,
@@ -41,6 +45,14 @@ import {
   sendEncryptedText,
   subscribeEncryptedMailbox,
 } from "./security/signal";
+
+/// 将字节数格式化为人类可读的 KB/MB 字符串。
+/// 用于附件上传进度显示。1024 进制，保留 1 位小数（< 1KB 时显示整数）。
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function Navigation({ locale, t, onLocaleChange, profileName, activeView, onViewChange }: {
   locale: Locale;
@@ -227,6 +239,15 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
   const [attachments, setAttachments] = useState<AttachmentReference[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState("");
   const [disappearAfter, setDisappearAfter] = useState(0);
+  // 附件上传进度（null=无上传进行中）。上传完成或失败后清空。
+  const [uploadProgress, setUploadProgress] = useState<{
+    uploadedChunks: number;
+    chunkCount: number;
+    uploadedBytes: number;
+    totalBytes: number;
+  } | null>(null);
+  // 上传失败时保留待重试的文件；重试成功或取消后清空。
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   useEffect(() => {
     if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
       setMessages([]);
@@ -354,10 +375,20 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
       setAttachmentStatus(t("vaultError"));
       return;
     }
+    // 配额前置校验：避免大文件进入加密流程后才发现超限。
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      setPendingFile(null);
+      setAttachmentStatus(t("quotaExceeded"));
+      return;
+    }
+    setPendingFile(null);
     setAttachmentStatus(t("attachmentUploading"));
+    setUploadProgress({ uploadedChunks: 0, chunkCount: Math.ceil(file.size / (1024 * 1024)), uploadedBytes: 0, totalBytes: file.size });
     try {
       const attachmentExpiry = Math.floor(Date.now() / 1000) + (disappearAfter || 30 * 24 * 60 * 60);
-      const reference = await encryptAndUploadAttachment(file, session, attachmentExpiry);
+      const reference = await encryptAndUploadAttachment(file, session, attachmentExpiry, (progress) => {
+        setUploadProgress(progress);
+      });
       await sendEncryptedAttachment(profile, session, recipient, reference, disappearAfter || undefined);
       await appendConversationHistory(profile, recipient, {
         id: crypto.randomUUID(),
@@ -370,8 +401,12 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
       void syncEncryptedBackup(profile, session).catch(() => undefined);
       setAttachments((current) => [...current, reference]);
       setAttachmentStatus("");
+      setUploadProgress(null);
     } catch {
-      setAttachmentStatus(t("attachmentFailed"));
+      // 失败后保留 pendingFile 供重试，清空进度。
+      setPendingFile(file);
+      setUploadProgress(null);
+      setAttachmentStatus(t("uploadFailed"));
     }
   }
   async function downloadAttachment(reference: AttachmentReference) {
@@ -431,6 +466,36 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
           </article>
         ))}
         {attachmentStatus ? <p className="attachment-status" role="status">{attachmentStatus}</p> : null}
+        {/* 上传进度条：百分比 + 已上传/总字节 */}
+        {uploadProgress ? (
+          <div className="upload-progress" role="progressbar" aria-valuemin={0} aria-valuemax={uploadProgress.totalBytes} aria-valuenow={uploadProgress.uploadedBytes}>
+            <div className="upload-progress-label">
+              {t("uploadProgress")} {Math.round((uploadProgress.uploadedBytes / uploadProgress.totalBytes) * 100)}%
+            </div>
+            <div className="upload-progress-bar">
+              <div
+                className="upload-progress-fill"
+                style={{ width: `${(uploadProgress.uploadedBytes / uploadProgress.totalBytes) * 100}%` }}
+              />
+            </div>
+            <div className="upload-progress-detail">
+              {formatBytes(uploadProgress.uploadedBytes)} / {formatBytes(uploadProgress.totalBytes)}
+              {" · "}{uploadProgress.uploadedChunks}/{uploadProgress.chunkCount}
+            </div>
+          </div>
+        ) : null}
+        {/* 失败重试 + 取消按钮 */}
+        {pendingFile ? (
+          <div className="upload-retry-bar">
+            <span className="upload-retry-name">{pendingFile.name}</span>
+            <button type="button" onClick={() => void uploadAttachment(pendingFile)}>
+              {t("retryUpload")}
+            </button>
+            <button type="button" onClick={() => { setPendingFile(null); setAttachmentStatus(""); }}>
+              {t("cancelUpload")}
+            </button>
+          </div>
+        ) : null}
       </section>
       <Composer
         t={t}
@@ -459,6 +524,8 @@ function GroupWorkspace({ locale, profile, session, t }: {
   const [status, setStatus] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const selected = availableGroups.find((group) => group.groupId === selectedGroupId);
+  // 当前设备是否为该群管理员（控制移除成员、邀请策略等管理 UI 的可见性）
+  const isAdmin = selected ? isGroupAdmin(profile, selected.groupId) : false;
 
   function refreshGroups() {
     const next = [...listEncryptedGroups(profile)];
@@ -543,6 +610,56 @@ function GroupWorkspace({ locale, profile, session, t }: {
     }
   }
 
+  // 移除群成员：仅管理员可操作；触发 MLS epoch 更新，被移除者无法再解密新消息。
+  async function removeMember(memberDeviceId: string) {
+    if (!selected) return;
+    if (memberDeviceId === profile.deviceId) {
+      setStatus(t("cannotRemoveSelf"));
+      return;
+    }
+    if (!window.confirm(t("removeMemberConfirm"))) return;
+    try {
+      await removeGroupMember(profile, session, selected.groupId, memberDeviceId);
+      refreshGroups();
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : t("vaultError"));
+    }
+  }
+
+  // 切换邀请策略：仅管理员可操作；anyone=所有成员可邀请，admins=仅管理员可邀请。
+  async function changeInvitePolicy(policy: "anyone" | "admins") {
+    if (!selected) return;
+    try {
+      await setGroupInvitePolicy(profile, session, selected.groupId, policy);
+      refreshGroups();
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : t("vaultError"));
+    }
+  }
+
+  // 退出群组：本地删除群元数据并备份。MLS 协议层 self-removal 受限，
+  // 这里采用本地退出（不再接收/解密该群消息），不发起 remove_member commit。
+  async function leaveGroup() {
+    if (!selected) return;
+    if (!window.confirm(t("leaveGroupConfirm"))) return;
+    try {
+      // 从本地 MLS state 的 groups 列表移除元数据，保留底层 OpenMLS 状态以防误操作。
+      const allGroups = listEncryptedGroups(profile);
+      const remaining = allGroups.filter((group) => group.groupId !== selected.groupId);
+      profile.mls.groups = [...remaining];
+      await saveMlsState(profile);
+      void syncEncryptedBackup(profile, session).catch(() => undefined);
+      setSelectedGroupId("");
+      setMessages([]);
+      refreshGroups();
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : t("vaultError"));
+    }
+  }
+
   return (
     <main className="group-workspace">
       <aside className="group-sidebar">
@@ -582,7 +699,10 @@ function GroupWorkspace({ locale, profile, session, t }: {
               <span className="avatar"><UsersRound /></span>
               <div className="chat-title">
                 <strong>{selected.name}</strong>
-                <span><LockKeyhole /> {t("mlsProtocol")} · {selected.memberDeviceIds.length} {t("groupMembers")}</span>
+                <span>
+                  <LockKeyhole /> {t("mlsProtocol")} · {selected.memberDeviceIds.length} {t("groupMembers")}
+                  {isAdmin ? <em className="admin-badge"> · {t("youAreAdmin")}</em> : null}
+                </span>
               </div>
               <form className="group-invite" onSubmit={(event) => void invite(event)}>
                 <input
@@ -596,6 +716,66 @@ function GroupWorkspace({ locale, profile, session, t }: {
                 <button>{t("addMember")}</button>
               </form>
             </header>
+            {/* 群管理面板：成员列表 + 邀请策略 + 退出群组 */}
+            <details className="group-admin-panel">
+              <summary>{t("groupAdmin")}</summary>
+              <div className="group-admin-body">
+                <section className="member-list-section">
+                  <h3>{t("memberList")}</h3>
+                  <ul className="member-list">
+                    {selected.memberDeviceIds.map((memberDeviceId) => {
+                      const memberIsAdmin = (selected.adminDeviceIds ?? []).includes(memberDeviceId);
+                      const isSelf = memberDeviceId === profile.deviceId;
+                      return (
+                        <li key={memberDeviceId} className="member-item">
+                          <span className="member-id">{memberDeviceId.slice(0, 8)}</span>
+                          {memberIsAdmin ? <em className="admin-tag">{t("youAreAdmin")}</em> : null}
+                          {isSelf ? <em className="self-tag">·</em> : null}
+                          {/* 管理员可移除其他成员；不能移除自己 */}
+                          {isAdmin && !isSelf ? (
+                            <button
+                              className="remove-member-btn"
+                              onClick={() => void removeMember(memberDeviceId)}
+                            >
+                              {t("removeMember")}
+                            </button>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+                {/* 邀请策略切换：仅管理员可见 */}
+                {isAdmin ? (
+                  <section className="invite-policy-section">
+                    <h3>{t("invitePolicy")}</h3>
+                    <label>
+                      <input
+                        type="radio"
+                        name={`invite-policy-${selected.groupId}`}
+                        checked={(selected.invitePolicy ?? "admins") === "anyone"}
+                        onChange={() => void changeInvitePolicy("anyone")}
+                      />
+                      {t("invitePolicyAnyone")}
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name={`invite-policy-${selected.groupId}`}
+                        checked={(selected.invitePolicy ?? "admins") === "admins"}
+                        onChange={() => void changeInvitePolicy("admins")}
+                      />
+                      {t("invitePolicyAdmins")}
+                    </label>
+                  </section>
+                ) : null}
+                <section className="leave-group-section">
+                  <button className="leave-group-btn" onClick={() => void leaveGroup()}>
+                    {t("leaveGroup")}
+                  </button>
+                </section>
+              </div>
+            </details>
             <section className="messages" aria-live="polite">
               {messages.map((message) => (
                 <article className={`message-row ${message.from}`} key={message.id}>

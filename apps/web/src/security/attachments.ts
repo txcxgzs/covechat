@@ -17,6 +17,10 @@ import {
 
 export const ATTACHMENT_CHUNK_SIZE = 1024 * 1024;
 export const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024;
+// 单块上传失败后的最大重试次数（不含首次尝试）。
+export const ATTACHMENT_CHUNK_MAX_RETRIES = 3;
+// 重试初始退避（毫秒），每次翻倍：500ms → 1s → 2s。
+const ATTACHMENT_RETRY_BASE_DELAY = 500;
 const encoder = new TextEncoder();
 let cryptoReady: Promise<unknown> | undefined;
 
@@ -52,13 +56,59 @@ function encodedBlobLength(plaintextLength: number): number {
   }).length;
 }
 
+/// 上传进度回调参数。
+/// - uploadedChunks：已成功上传的块数（0..chunkCount）
+/// - chunkCount：总块数
+/// - uploadedBytes：已上传字节数（明文偏移，便于显示）
+/// - totalBytes：文件总字节数
+export type UploadProgress = {
+  uploadedChunks: number;
+  chunkCount: number;
+  uploadedBytes: number;
+  totalBytes: number;
+};
+
+/// 带重试的单块上传。仅对网络错误和 5xx 重试；4xx（含 413 配额超限）不重试。
+/// 重试采用指数退避：500ms → 1s → 2s。
+async function uploadChunkWithRetry(
+  objectId: string,
+  chunkIndex: number,
+  ciphertext: string,
+  ciphertextDigest: string,
+  session: AuthSession,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= ATTACHMENT_CHUNK_MAX_RETRIES; attempt += 1) {
+    try {
+      await uploadAttachmentChunk(objectId, chunkIndex, ciphertext, ciphertextDigest, session);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt === ATTACHMENT_CHUNK_MAX_RETRIES) break;
+      // 4xx 错误（除 429 外）不重试：配额超限、鉴权失败等不可恢复。
+      const message = error instanceof Error ? error.message : "";
+      const isClientError = /failed: 4\d{2}$/u.test(message) && !/failed: 429$/u.test(message);
+      if (isClientError) break;
+      // 指数退避：500ms × 2^attempt
+      const delay = ATTACHMENT_RETRY_BASE_DELAY * (2 ** attempt);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
 export async function encryptAndUploadAttachment(
   file: File,
   session: AuthSession,
   expiresAt = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+  onProgress?: (progress: UploadProgress) => void,
 ): Promise<AttachmentReference> {
-  if (file.size <= 0 || file.size > MAX_ATTACHMENT_SIZE) {
-    throw new Error("invalid attachment size");
+  // 配额前置校验：避免上传到一半才发现超限。
+  if (file.size <= 0) {
+    throw new Error("attachment file is empty");
+  }
+  if (file.size > MAX_ATTACHMENT_SIZE) {
+    throw new Error(`attachment exceeds quota: ${file.size} > ${MAX_ATTACHMENT_SIZE}`);
   }
   await ensureCrypto();
   const objectId = crypto.randomUUID();
@@ -76,6 +126,9 @@ export async function encryptAndUploadAttachment(
     session,
   );
   const chunkDigests: string[] = [];
+  let uploadedBytes = 0;
+  // 首次进度回调：0 块已上传。
+  onProgress?.({ uploadedChunks: 0, chunkCount, uploadedBytes: 0, totalBytes: file.size });
   for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
     const start = chunkIndex * ATTACHMENT_CHUNK_SIZE;
     const plaintext = new Uint8Array(
@@ -88,7 +141,7 @@ export async function encryptAndUploadAttachment(
       toBase64Url(plaintext),
     );
     const ciphertextDigest = await digest(ciphertext);
-    await uploadAttachmentChunk(
+    await uploadChunkWithRetry(
       objectId,
       chunkIndex,
       ciphertext,
@@ -96,6 +149,8 @@ export async function encryptAndUploadAttachment(
       session,
     );
     chunkDigests.push(ciphertextDigest);
+    uploadedBytes += plaintext.length;
+    onProgress?.({ uploadedChunks: chunkIndex + 1, chunkCount, uploadedBytes, totalBytes: file.size });
   }
   await finalizeAttachment(objectId, session);
   return {

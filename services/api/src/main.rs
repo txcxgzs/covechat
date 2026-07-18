@@ -16,11 +16,12 @@ use std::{
 use axum::{
     Json, Router,
     extract::{
-        Path, State,
+        Path, Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    http::{HeaderMap, Method, StatusCode},
+    middleware::{Next, from_fn_with_state},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -48,6 +49,53 @@ struct AppState {
     persistence: Option<Persistence>,
     object_store: Option<ObjectStore>,
     rate_limiter: Option<RateLimiter>,
+    allowed_origins: AllowedOrigins,
+}
+
+/// 允许的 Origin 列表，用于 CSRF 纵深防御。
+/// 从 `ALLOWED_ORIGINS` 环境变量读取（逗号分隔，如 `https://chat.example.com`）。
+/// 空列表 = 开发模式，放行所有（启动时打印 WARN）。
+#[derive(Clone, Default)]
+struct AllowedOrigins(Vec<String>);
+
+impl AllowedOrigins {
+    /// 从环境变量构造。空值或未设置时返回空列表（开发模式）。
+    fn from_env() -> Self {
+        match env::var("ALLOWED_ORIGINS") {
+            Ok(value) => {
+                let origins: Vec<String> = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                if origins.is_empty() {
+                    tracing::warn!(
+                        "ALLOWED_ORIGINS is empty; Origin checks are disabled (development mode)"
+                    );
+                } else {
+                    tracing::info!(?origins, "Origin enforcement enabled");
+                }
+                Self(origins)
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "ALLOWED_ORIGINS is unset; Origin checks are disabled (development mode)"
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// 空列表表示开发模式（放行所有）。
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// 判断 Origin 是否在允许列表中。
+    fn is_allowed(&self, origin: &str) -> bool {
+        self.0.iter().any(|allowed| allowed == origin)
+    }
 }
 
 #[derive(Default)]
@@ -337,12 +385,14 @@ async fn main() {
     } else {
         tracing::warn!("REDIS_URL is unset; mailbox events are process-local");
     }
+    let allowed_origins = AllowedOrigins::from_env();
     let state = AppState {
         inner: Arc::new(Mutex::new(store)),
         events,
         persistence,
         object_store,
         rate_limiter,
+        allowed_origins,
     };
     tokio::spawn(cleanup_loop(state.clone()));
     let app = router(state);
@@ -359,6 +409,27 @@ async fn main() {
         .expect("bind API");
     tracing::info!(%host, port, "API listening");
     axum::serve(listener, app).await.expect("serve API");
+}
+
+/// Origin 校验中间件：对 POST/PUT/DELETE 方法校验 Origin 头。
+/// 空 allowed_origins = 开发模式，放行所有。
+/// 用于 CSRF 纵深防御（本项目用 Bearer token 不用 cookie，CSRF 风险本身低，但 Origin 校验仍能挡住跨站请求）。
+async fn require_origin(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if state.allowed_origins.is_empty() {
+        return next.run(request).await;
+    }
+    let method = request.method();
+    if method != Method::POST && method != Method::PUT && method != Method::DELETE {
+        return next.run(request).await;
+    }
+    let origin = request
+        .headers()
+        .get("origin")
+        .and_then(|value| value.to_str().ok());
+    match origin {
+        Some(origin) if state.allowed_origins.is_allowed(origin) => next.run(request).await,
+        _ => StatusCode::FORBIDDEN.into_response(),
+    }
 }
 
 fn router(state: AppState) -> Router {
@@ -409,6 +480,7 @@ fn router(state: AppState) -> Router {
             delete(acknowledge_envelope),
         )
         .route("/v1/events/{device_id}", get(events))
+        .layer(from_fn_with_state(state.clone(), require_origin))
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BYTES))
         .with_state(state)
 }
@@ -585,8 +657,16 @@ async fn set_block(
 
 async fn onboard_account(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<OnboardingRequest>,
 ) -> StatusCode {
+    // 匿名限流：按 IP 限制注册频率（5 次/小时），防止批量注册。
+    if anonymous_rate_limit(&state, &headers, "onboard", 5, 3600)
+        .await
+        .is_err()
+    {
+        return StatusCode::TOO_MANY_REQUESTS;
+    }
     let account = input.account;
     let device = input.device;
     if account.protocol_version != PROTOCOL_VERSION
@@ -778,7 +858,15 @@ async fn list_devices(
 async fn create_challenge(
     State(state): State<AppState>,
     Path(device_id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> (StatusCode, Json<Option<ChallengeResponse>>) {
+    // 匿名限流：按 IP 限制登录挑战频率（10 次/分钟），防止登录轰炸。
+    if anonymous_rate_limit(&state, &headers, "challenge", 10, 60)
+        .await
+        .is_err()
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(None));
+    }
     let mut store = state.inner.lock().await;
     let Some(device) = store.devices.get(&device_id) else {
         return (StatusCode::NOT_FOUND, Json(None));
@@ -859,7 +947,15 @@ async fn verify_challenge(
 async fn create_recovery_challenge(
     State(state): State<AppState>,
     Path(username): Path<String>,
+    headers: HeaderMap,
 ) -> (StatusCode, Json<Option<ChallengeResponse>>) {
+    // 匿名限流：按 IP 限制恢复挑战频率（5 次/小时），防止恢复码暴力枚举。
+    if anonymous_rate_limit(&state, &headers, "recovery_challenge", 5, 3600)
+        .await
+        .is_err()
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(None));
+    }
     let mut store = state.inner.lock().await;
     if !store.accounts.contains_key(&username) {
         return (StatusCode::NOT_FOUND, Json(None));
@@ -1034,6 +1130,13 @@ async fn read_directory(
     Path(username): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    // 认证限流：按 device_id 限流（60 次/分钟），防止用户名枚举。
+    if authenticated_rate_limit(&state, &headers, "directory", 60, 60)
+        .await
+        .is_err()
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(None));
+    }
     let mut store = state.inner.lock().await;
     if authenticated_device(&headers, &mut store).is_none() {
         return (StatusCode::UNAUTHORIZED, Json(None));
@@ -1546,6 +1649,14 @@ async fn events(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
+    // WebSocket 升级是 GET 请求，不经过 require_origin 中间件，这里手动校验 Origin。
+    if !state.allowed_origins.is_empty() {
+        let origin = headers.get("origin").and_then(|value| value.to_str().ok());
+        match origin {
+            Some(origin) if state.allowed_origins.is_allowed(origin) => {}
+            _ => return StatusCode::FORBIDDEN.into_response(),
+        }
+    }
     let mut store = state.inner.lock().await;
     if authenticated_websocket_device(&headers, &mut store) != Some(device_id) {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -1578,22 +1689,10 @@ async fn cleanup_loop(state: AppState) {
     loop {
         interval.tick().await;
         let now = unix_now();
+        // 内存清理在锁内完成，返回需要从 S3 删除的附件列表（S3 删除在锁外做，避免长持锁）。
         let expired = {
             let mut store = state.inner.lock().await;
-            store.idempotency.retain(|_, expires_at| *expires_at > now);
-            store.envelopes.values_mut().for_each(|messages| {
-                messages.retain(|message| message.expires_at > now);
-            });
-            let expired: Vec<_> = store
-                .attachments
-                .iter()
-                .filter(|(_, item)| item.expires_at <= now)
-                .map(|(id, item)| (*id, item.chunk_count))
-                .collect();
-            store
-                .attachments
-                .retain(|_, attachment| attachment.expires_at > now);
-            expired
+            cleanup_once(&mut store, now)
         };
         if let Some(objects) = &state.object_store {
             for (object_id, chunk_count) in expired {
@@ -1608,6 +1707,50 @@ async fn cleanup_loop(state: AppState) {
             tracing::error!(error = %error, "clean expired durable ciphertext");
         }
     }
+}
+
+/// 单次内存清理：移除所有已过期的短期状态，返回需要从对象存储删除的附件列表。
+///
+/// 清理范围（PROJECT_CONTEXT 第 6 节第 8 项）：
+/// - 幂等键（idempotency）
+/// - 投递信封（envelopes）
+/// - 登录挑战（challenges）与恢复挑战（recovery_challenges）
+/// - 会话（sessions）与恢复会话（recovery_sessions）
+/// - 附件对象（attachments，内存部分；S3 部分由调用方按返回值删除）
+///
+/// 提取为纯函数以便单元测试；`cleanup_loop` 是死循环不便直接调用。
+fn cleanup_once(store: &mut Store, now: u64) -> Vec<(Uuid, u32)> {
+    // 幂等键：过期后不能再用于去重，直接清除。
+    store.idempotency.retain(|_, expires_at| *expires_at > now);
+    // 信封：每个收件人邮箱里过期的信封移除。
+    store.envelopes.values_mut().for_each(|messages| {
+        messages.retain(|message| message.expires_at > now);
+    });
+    // 登录挑战：120s 寿命，过期未消费的清除。
+    store
+        .challenges
+        .retain(|_, challenge| challenge.expires_at > now);
+    // 恢复挑战：120s 寿命，过期未消费的清除。
+    store
+        .recovery_challenges
+        .retain(|_, challenge| challenge.expires_at > now);
+    // 会话：3600s 寿命，过期会话清除（authenticate_token 调用时也会被动清理）。
+    store.sessions.retain(|_, session| session.expires_at > now);
+    // 恢复会话：600s 寿命，过期清除。
+    store
+        .recovery_sessions
+        .retain(|_, session| session.expires_at > now);
+    // 附件：收集过期附件的 (id, chunk_count) 供调用方删除 S3 对象，然后从内存移除。
+    let expired: Vec<_> = store
+        .attachments
+        .iter()
+        .filter(|(_, item)| item.expires_at <= now)
+        .map(|(id, item)| (*id, item.chunk_count))
+        .collect();
+    store
+        .attachments
+        .retain(|_, attachment| attachment.expires_at > now);
+    expired
 }
 
 fn valid_username(value: &str) -> bool {
@@ -1705,6 +1848,41 @@ async fn authenticated_rate_limit(
         }
     }
     Ok(device_id)
+}
+
+/// 匿名限流：基于 X-Forwarded-For 头的 IP 地址。
+/// 用于不需要认证的接口（注册、登录挑战、恢复挑战），防止批量注册和暴力枚举。
+/// 注意：X-Forwarded-For 必须在反向代理层设置并清除客户端伪造的值。
+/// 若未配置 Redis，限流降级为放行（开发模式）。
+async fn anonymous_rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &str,
+    limit: u64,
+    window_seconds: u64,
+) -> Result<(), StatusCode> {
+    let Some(rate_limiter) = &state.rate_limiter else {
+        return Ok(());
+    };
+    // 从 X-Forwarded-For 提取客户端 IP；缺失时用 "anonymous" 兜底。
+    let subject = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("anonymous");
+    match rate_limiter
+        .check(scope, subject, limit, window_seconds)
+        .await
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(StatusCode::TOO_MANY_REQUESTS),
+        Err(error) => {
+            tracing::error!(error = %error, scope, "Redis rate limit failure");
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
 }
 
 fn authenticated_websocket_device(headers: &HeaderMap, store: &mut Store) -> Option<Uuid> {
@@ -1828,6 +2006,7 @@ mod tests {
             persistence: None,
             object_store: None,
             rate_limiter: None,
+            allowed_origins: AllowedOrigins::default(),
         };
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2038,5 +2217,671 @@ mod tests {
             .await,
             StatusCode::CONFLICT
         );
+    }
+
+    // === 新增辅助：在已有 state 里再注册一个账户 + 设备 + session ===
+    // 用于拉黑、备份归属等需要两个身份的测试。token 与 authenticated_state 的 [3;32] 区分开。
+    async fn add_second_user(state: &AppState, username: &str) -> (HeaderMap, Uuid) {
+        let (account, device) = account_and_device(username);
+        let device_id = device.device_id;
+        let token = [5; 32];
+        let mut store = state.inner.lock().await;
+        store.accounts.insert(username.to_string(), account);
+        store.devices.insert(device_id, device);
+        store.sessions.insert(
+            Sha256::digest(token).into(),
+            Session {
+                device_id,
+                expires_at: unix_now() + 60,
+            },
+        );
+        drop(store);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", URL_SAFE_NO_PAD.encode(token))).unwrap(),
+        );
+        (headers, device_id)
+    }
+
+    // === 新增辅助：构造一个签名合法的加密信封 ===
+    // 信封签名载荷必须与 verify_envelope_signature 中的元组字段顺序完全一致。
+    fn signed_envelope(
+        sender_device_id: Uuid,
+        recipient_device_id: Uuid,
+        sender_key: &SigningKey,
+        sequence: u64,
+        idempotency_key: &str,
+    ) -> EncryptedEnvelope {
+        let envelope_id = Uuid::new_v4();
+        let conversation_id = Uuid::new_v4();
+        let expires_at = unix_now() + 60;
+        let ciphertext = "ciphertext".to_string();
+        let payload = serde_json::to_vec(&(
+            PROTOCOL_VERSION,
+            envelope_id,
+            sender_device_id,
+            recipient_device_id,
+            conversation_id,
+            sequence,
+            expires_at,
+            &ciphertext,
+            idempotency_key,
+        ))
+        .unwrap();
+        let signature = URL_SAFE_NO_PAD.encode(sender_key.sign(&payload).to_bytes());
+        EncryptedEnvelope {
+            protocol_version: PROTOCOL_VERSION,
+            envelope_id,
+            sender_device_id,
+            recipient_device_id,
+            conversation_id,
+            sequence,
+            expires_at,
+            ciphertext,
+            signature,
+            idempotency_key: idempotency_key.to_string(),
+        }
+    }
+
+    // 构造一个举报请求载荷。CreateAbuseReport 未派生 Clone（项目惯例），用函数按需重建。
+    fn make_abuse_input(
+        signing_key: &SigningKey,
+        report_id: Uuid,
+        reported_username: &str,
+        bundle: &str,
+        context: &str,
+    ) -> CreateAbuseReport {
+        let created_at = unix_now();
+        let payload = serde_json::to_vec(&(
+            PROTOCOL_VERSION,
+            report_id,
+            reported_username,
+            bundle,
+            context,
+            created_at,
+        ))
+        .unwrap();
+        let signature = URL_SAFE_NO_PAD.encode(signing_key.sign(&payload).to_bytes());
+        CreateAbuseReport {
+            protocol_version: PROTOCOL_VERSION,
+            report_id,
+            reported_username: reported_username.to_string(),
+            disclosed_message_bundle: bundle.to_string(),
+            context: context.to_string(),
+            created_at,
+            reporter_signature: signature,
+        }
+    }
+
+    // 举报：签名正确 → CREATED；相同 report_id → CONFLICT；签名错误 → UNAUTHORIZED。
+    #[tokio::test]
+    async fn abuse_report_accepts_signed_payload_and_rejects_duplicates() {
+        let (state, headers, _) = authenticated_state("maya_chen");
+        let signing_key = SigningKey::from_bytes(&[9; 32]);
+        let report_id = Uuid::new_v4();
+        // 第一次提交：签名正确 → CREATED
+        let input = make_abuse_input(&signing_key, report_id, "jonas_weber", "bundle", "ctx");
+        assert_eq!(
+            create_abuse_report(State(state.clone()), headers.clone(), Json(input)).await,
+            StatusCode::CREATED
+        );
+        // 第二次：相同 report_id → CONFLICT（签名先验证通过，然后撞重复键）
+        let dup = make_abuse_input(&signing_key, report_id, "jonas_weber", "bundle", "ctx");
+        assert_eq!(
+            create_abuse_report(State(state.clone()), headers.clone(), Json(dup)).await,
+            StatusCode::CONFLICT
+        );
+        // 第三次：签名错误 → UNAUTHORIZED（换新 report_id 避免与重复检查混淆）
+        let mut bad =
+            make_abuse_input(&signing_key, Uuid::new_v4(), "jonas_weber", "bundle", "ctx");
+        bad.reporter_signature = URL_SAFE_NO_PAD.encode([0u8; 64]);
+        assert_eq!(
+            create_abuse_report(State(state), headers, Json(bad)).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // 拉黑：recipient 拉黑 sender 后，sender 投递返回 FORBIDDEN；解除后恢复 ACCEPTED。
+    // 验证 abuse 控制在密文投递层生效，被拉黑用户无法向对方设备投递新消息。
+    #[tokio::test]
+    async fn block_user_blocks_delivery_and_unblock_restores() {
+        let (state, sender_headers, sender_device_id) = authenticated_state("maya_chen");
+        let (recipient_headers, recipient_device_id) = add_second_user(&state, "jonas_weber").await;
+        let sender_key = SigningKey::from_bytes(&[9; 32]);
+
+        // 初始投递 → ACCEPTED
+        let envelope1 = signed_envelope(
+            sender_device_id,
+            recipient_device_id,
+            &sender_key,
+            1,
+            "idem-1",
+        );
+        let mut headers1 = sender_headers.clone();
+        headers1.insert(
+            "x-idempotency-key",
+            HeaderValue::from_str("idem-1").unwrap(),
+        );
+        assert_eq!(
+            store_envelope(State(state.clone()), headers1, Json(envelope1)).await,
+            StatusCode::ACCEPTED
+        );
+
+        // recipient 拉黑 sender
+        assert_eq!(
+            block_user(
+                State(state.clone()),
+                Path("maya_chen".into()),
+                recipient_headers.clone(),
+            )
+            .await,
+            StatusCode::NO_CONTENT
+        );
+
+        // 再投递 → FORBIDDEN（拉黑在密文投递层生效）
+        let envelope2 = signed_envelope(
+            sender_device_id,
+            recipient_device_id,
+            &sender_key,
+            2,
+            "idem-2",
+        );
+        let mut headers2 = sender_headers.clone();
+        headers2.insert(
+            "x-idempotency-key",
+            HeaderValue::from_str("idem-2").unwrap(),
+        );
+        assert_eq!(
+            store_envelope(State(state.clone()), headers2, Json(envelope2)).await,
+            StatusCode::FORBIDDEN
+        );
+
+        // 解除拉黑
+        assert_eq!(
+            unblock_user(
+                State(state.clone()),
+                Path("maya_chen".into()),
+                recipient_headers.clone(),
+            )
+            .await,
+            StatusCode::NO_CONTENT
+        );
+
+        // 再投递 → ACCEPTED（sequence 跳到 3，因为被拒那次没有推进 last_sequence）
+        let envelope3 = signed_envelope(
+            sender_device_id,
+            recipient_device_id,
+            &sender_key,
+            3,
+            "idem-3",
+        );
+        let mut headers3 = sender_headers.clone();
+        headers3.insert(
+            "x-idempotency-key",
+            HeaderValue::from_str("idem-3").unwrap(),
+        );
+        assert_eq!(
+            store_envelope(State(state), headers3, Json(envelope3)).await,
+            StatusCode::ACCEPTED
+        );
+    }
+
+    // 备份读取：用户只能读到自己的备份；没有备份的用户返回 NOT_FOUND。
+    #[tokio::test]
+    async fn read_latest_backup_returns_only_owner_backup() {
+        let (state, headers, _) = authenticated_state("maya_chen");
+        let ciphertext = "owner-backup".to_string();
+        let backup = EncryptedBackup {
+            protocol_version: PROTOCOL_VERSION,
+            version: 1,
+            previous_digest: None,
+            ciphertext_digest: digest_text(&ciphertext),
+            ciphertext,
+            created_at: unix_now(),
+        };
+        assert_eq!(
+            store_backup(State(state.clone()), headers.clone(), Json(backup)).await,
+            StatusCode::NO_CONTENT
+        );
+        // 自己能读
+        let response = read_latest_backup(State(state.clone()), headers)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        // 别人（无备份）→ NOT_FOUND
+        let (other_headers, _) = add_second_user(&state, "jonas_weber").await;
+        let other_response = read_latest_backup(State(state), other_headers)
+            .await
+            .into_response();
+        assert_eq!(other_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // 恢复会话能读取账户备份：恢复码认证后能拿到加密备份用于灾难恢复。
+    #[tokio::test]
+    async fn recovery_session_can_read_backup() {
+        let (state, _, _) = authenticated_state("maya_chen");
+        let ciphertext = "recovery-backup".to_string();
+        let backup = EncryptedBackup {
+            protocol_version: PROTOCOL_VERSION,
+            version: 1,
+            previous_digest: None,
+            ciphertext_digest: digest_text(&ciphertext),
+            ciphertext,
+            created_at: unix_now(),
+        };
+        {
+            let mut store = state.inner.lock().await;
+            store.backups.insert("maya_chen".to_string(), backup);
+        }
+        // 构造一个 recovery session（模拟 verify_recovery_challenge 成功后的状态）
+        let recovery_token = [7; 32];
+        {
+            let mut store = state.inner.lock().await;
+            store.recovery_sessions.insert(
+                Sha256::digest(recovery_token).into(),
+                RecoverySession {
+                    username: "maya_chen".to_string(),
+                    expires_at: unix_now() + 60,
+                },
+            );
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!(
+                "Bearer {}",
+                URL_SAFE_NO_PAD.encode(recovery_token)
+            ))
+            .unwrap(),
+        );
+        let response = read_latest_backup_with_recovery(State(state), headers)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // 过期处理：store_envelope 拒绝 expires_at <= now；read_mailbox 过滤掉已过期信封。
+    // 这是 cleanup_loop 在可见行为层的等价测试（cleanup_loop 是死循环不便直接调用）。
+    #[tokio::test]
+    async fn expired_envelopes_are_rejected_and_filtered_from_mailbox() {
+        let (state, headers, device_id) = authenticated_state("maya_chen");
+        let sender_key = SigningKey::from_bytes(&[9; 32]);
+
+        // 1) store_envelope 拒绝 expires_at <= now（边界值用 == now）
+        let envelope_id = Uuid::new_v4();
+        let conversation_id = Uuid::new_v4();
+        let idempotency_key = "expired-at-submit".to_string();
+        let expires_at = unix_now();
+        let ciphertext = "ciphertext".to_string();
+        let payload = serde_json::to_vec(&(
+            PROTOCOL_VERSION,
+            envelope_id,
+            device_id,
+            Uuid::new_v4(),
+            conversation_id,
+            1_u64,
+            expires_at,
+            &ciphertext,
+            &idempotency_key,
+        ))
+        .unwrap();
+        let signature = URL_SAFE_NO_PAD.encode(sender_key.sign(&payload).to_bytes());
+        let expired = EncryptedEnvelope {
+            protocol_version: PROTOCOL_VERSION,
+            envelope_id,
+            sender_device_id: device_id,
+            recipient_device_id: Uuid::new_v4(),
+            conversation_id,
+            sequence: 1,
+            expires_at,
+            ciphertext,
+            signature,
+            idempotency_key: idempotency_key.clone(),
+        };
+        let mut headers_with_idem = headers.clone();
+        headers_with_idem.insert(
+            "x-idempotency-key",
+            HeaderValue::from_str(&idempotency_key).unwrap(),
+        );
+        assert_eq!(
+            store_envelope(State(state.clone()), headers_with_idem, Json(expired)).await,
+            StatusCode::BAD_REQUEST
+        );
+
+        // 2) 手动塞一个已过期的信封，read_mailbox 应过滤掉，返回空数组
+        {
+            let mut store = state.inner.lock().await;
+            store.envelopes.insert(
+                device_id,
+                vec![EncryptedEnvelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    envelope_id: Uuid::new_v4(),
+                    sender_device_id: Uuid::new_v4(),
+                    recipient_device_id: device_id,
+                    conversation_id: Uuid::new_v4(),
+                    sequence: 100,
+                    expires_at: unix_now().saturating_sub(1),
+                    ciphertext: "expired".into(),
+                    signature: "expired".into(),
+                    idempotency_key: "expired-idem".into(),
+                }],
+            );
+        }
+        let response = read_mailbox(State(state), Path(device_id), headers)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"[]");
+    }
+
+    // === cleanup_once 单元测试 ===
+    // cleanup_loop 是死循环不便直接测，提取的 cleanup_once 纯函数可直接验证清理行为。
+
+    // 构造一个塞满各类过期 + 未过期条目的 Store，便于多个测试复用。
+    fn store_with_mixed_expiry(now: u64) -> Store {
+        let mut store = Store::default();
+        // 幂等键：1 过期 / 1 存活
+        store
+            .idempotency
+            .insert("expired-idem".into(), now.saturating_sub(1));
+        store.idempotency.insert("live-idem".into(), now + 60);
+        // 信封：1 过期 / 1 存活（同一收件人）
+        let recipient = Uuid::new_v4();
+        store.envelopes.insert(
+            recipient,
+            vec![
+                EncryptedEnvelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    envelope_id: Uuid::new_v4(),
+                    sender_device_id: Uuid::new_v4(),
+                    recipient_device_id: recipient,
+                    conversation_id: Uuid::new_v4(),
+                    sequence: 1,
+                    expires_at: now.saturating_sub(1),
+                    ciphertext: "expired".into(),
+                    signature: "expired".into(),
+                    idempotency_key: "expired-env".into(),
+                },
+                EncryptedEnvelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    envelope_id: Uuid::new_v4(),
+                    sender_device_id: Uuid::new_v4(),
+                    recipient_device_id: recipient,
+                    conversation_id: Uuid::new_v4(),
+                    sequence: 2,
+                    expires_at: now + 60,
+                    ciphertext: "live".into(),
+                    signature: "live".into(),
+                    idempotency_key: "live-env".into(),
+                },
+            ],
+        );
+        // 登录挑战：1 过期 / 1 存活
+        store.challenges.insert(
+            Uuid::new_v4(),
+            Challenge {
+                device_id: Uuid::new_v4(),
+                bytes: [0; 32],
+                expires_at: now.saturating_sub(1),
+                consumed: false,
+            },
+        );
+        store.challenges.insert(
+            Uuid::new_v4(),
+            Challenge {
+                device_id: Uuid::new_v4(),
+                bytes: [1; 32],
+                expires_at: now + 120,
+                consumed: false,
+            },
+        );
+        // 恢复挑战：1 过期 / 1 存活
+        store.recovery_challenges.insert(
+            Uuid::new_v4(),
+            RecoveryChallenge {
+                username: "maya_chen".into(),
+                bytes: [0; 32],
+                expires_at: now.saturating_sub(1),
+                consumed: false,
+            },
+        );
+        store.recovery_challenges.insert(
+            Uuid::new_v4(),
+            RecoveryChallenge {
+                username: "jonas_weber".into(),
+                bytes: [1; 32],
+                expires_at: now + 120,
+                consumed: false,
+            },
+        );
+        // 会话：1 过期 / 1 存活
+        store.sessions.insert(
+            [0; 32],
+            Session {
+                device_id: Uuid::new_v4(),
+                expires_at: now.saturating_sub(1),
+            },
+        );
+        store.sessions.insert(
+            [1; 32],
+            Session {
+                device_id: Uuid::new_v4(),
+                expires_at: now + 3600,
+            },
+        );
+        // 恢复会话：1 过期 / 1 存活
+        store.recovery_sessions.insert(
+            [0; 32],
+            RecoverySession {
+                username: "maya_chen".into(),
+                expires_at: now.saturating_sub(1),
+            },
+        );
+        store.recovery_sessions.insert(
+            [1; 32],
+            RecoverySession {
+                username: "jonas_weber".into(),
+                expires_at: now + 600,
+            },
+        );
+        // 附件：1 过期（2 块）/ 1 存活（3 块）
+        store.attachments.insert(
+            Uuid::new_v4(),
+            AttachmentObject {
+                owner_device_id: Uuid::new_v4(),
+                chunk_count: 2,
+                ciphertext_size: 100,
+                expires_at: now.saturating_sub(1),
+                chunks: HashMap::new(),
+                finalized: false,
+            },
+        );
+        store.attachments.insert(
+            Uuid::new_v4(),
+            AttachmentObject {
+                owner_device_id: Uuid::new_v4(),
+                chunk_count: 3,
+                ciphertext_size: 200,
+                expires_at: now + 3600,
+                chunks: HashMap::new(),
+                finalized: true,
+            },
+        );
+        store
+    }
+
+    #[test]
+    fn cleanup_once_removes_all_expired_entries_and_keeps_live_ones() {
+        let now = 1_000_000_u64;
+        let mut store = store_with_mixed_expiry(now);
+        let expired = cleanup_once(&mut store, now);
+
+        // 幂等键：只剩存活的
+        assert_eq!(store.idempotency.len(), 1);
+        assert!(store.idempotency.contains_key("live-idem"));
+
+        // 信封：每个邮箱只剩存活的（过期信封被移除）
+        for messages in store.envelopes.values() {
+            for message in messages {
+                assert!(message.expires_at > now, "expired envelope not cleaned");
+            }
+        }
+        let total_envelopes: usize = store.envelopes.values().map(Vec::len).sum();
+        assert_eq!(total_envelopes, 1);
+
+        // 挑战：只剩存活的
+        assert_eq!(store.challenges.len(), 1);
+        for challenge in store.challenges.values() {
+            assert!(challenge.expires_at > now);
+        }
+
+        // 恢复挑战：只剩存活的
+        assert_eq!(store.recovery_challenges.len(), 1);
+        for challenge in store.recovery_challenges.values() {
+            assert!(challenge.expires_at > now);
+        }
+
+        // 会话：只剩存活的
+        assert_eq!(store.sessions.len(), 1);
+        for session in store.sessions.values() {
+            assert!(session.expires_at > now);
+        }
+
+        // 恢复会话：只剩存活的
+        assert_eq!(store.recovery_sessions.len(), 1);
+        for session in store.recovery_sessions.values() {
+            assert!(session.expires_at > now);
+        }
+
+        // 附件：只剩存活的
+        assert_eq!(store.attachments.len(), 1);
+        for attachment in store.attachments.values() {
+            assert!(attachment.expires_at > now);
+        }
+
+        // S3 删除列表：只包含过期附件，且 chunk_count 正确
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].1, 2, "expired attachment should have 2 chunks");
+    }
+
+    #[test]
+    fn cleanup_once_with_empty_store_is_noop() {
+        let mut store = Store::default();
+        let expired = cleanup_once(&mut store, unix_now());
+        assert!(expired.is_empty());
+        assert!(store.idempotency.is_empty());
+        assert!(store.envelopes.is_empty());
+        assert!(store.challenges.is_empty());
+        assert!(store.recovery_challenges.is_empty());
+        assert!(store.sessions.is_empty());
+        assert!(store.recovery_sessions.is_empty());
+        assert!(store.attachments.is_empty());
+    }
+
+    #[test]
+    fn cleanup_once_preserves_everything_when_nothing_expired() {
+        // 全部未过期时，cleanup_once 应当是 no-op，且 S3 删除列表为空。
+        // store_with_mixed_expiry(base) 构造的条目最小 expires_at 是 base-1（"过期"组）。
+        // 用 base-2 作为判断基准，则所有条目都满足 expires_at > benchmark，等价于"没有任何条目过期"。
+        let base = unix_now();
+        let mut store = store_with_mixed_expiry(base);
+        let benchmark = base.saturating_sub(2);
+        let expired = cleanup_once(&mut store, benchmark);
+        assert!(
+            expired.is_empty(),
+            "nothing should be expired relative to benchmark"
+        );
+        assert_eq!(store.idempotency.len(), 2);
+        assert_eq!(store.challenges.len(), 2);
+        assert_eq!(store.recovery_challenges.len(), 2);
+        assert_eq!(store.sessions.len(), 2);
+        assert_eq!(store.recovery_sessions.len(), 2);
+        assert_eq!(store.attachments.len(), 2);
+    }
+
+    // === AllowedOrigins 单元测试 ===
+
+    #[test]
+    fn allowed_origins_default_is_empty_development_mode() {
+        let origins = AllowedOrigins::default();
+        assert!(origins.is_empty());
+        // 空列表下任何 Origin 都不匹配，但中间件层会先检查 is_empty() 放行。
+        assert!(!origins.is_allowed("https://example.com"));
+    }
+
+    #[test]
+    fn allowed_origins_is_allowed_matches_exact() {
+        let origins = AllowedOrigins(vec![
+            "https://chat.example.com".to_string(),
+            "https://app.example.com".to_string(),
+        ]);
+        assert!(!origins.is_empty());
+        assert!(origins.is_allowed("https://chat.example.com"));
+        assert!(origins.is_allowed("https://app.example.com"));
+        // 不匹配的 Origin
+        assert!(!origins.is_allowed("https://evil.com"));
+        assert!(!origins.is_allowed("https://chat.example.com.evil.com"));
+        assert!(!origins.is_allowed(""));
+    }
+
+    // === anonymous_rate_limit 单元测试 ===
+    // 无 Redis 时降级放行（开发模式），不返回 TOO_MANY_REQUESTS。
+
+    #[tokio::test]
+    async fn anonymous_rate_limit_passes_without_redis() {
+        let (state, _, _) = authenticated_state("maya_chen");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_str("203.0.113.1").unwrap(),
+        );
+        // 无 Redis → 放行
+        assert!(
+            anonymous_rate_limit(&state, &headers, "test", 1, 60)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn anonymous_rate_limit_uses_anonymous_when_no_xff() {
+        let (state, _, _) = authenticated_state("maya_chen");
+        let headers = HeaderMap::new();
+        // 无 X-Forwarded-For + 无 Redis → 放行（subject 降级为 "anonymous"）
+        assert!(
+            anonymous_rate_limit(&state, &headers, "test", 1, 60)
+                .await
+                .is_ok()
+        );
+    }
+
+    // === read_directory 限流测试 ===
+    // 无 Redis 时 authenticated_rate_limit 降级放行，read_directory 正常工作。
+
+    #[tokio::test]
+    async fn read_directory_works_without_redis_rate_limit() {
+        let (state, headers, _) = authenticated_state("maya_chen");
+        // read_directory 现在先调用 authenticated_rate_limit（无 Redis 放行），
+        // 再调用 authenticated_device 验证。认证用户的 token 有效，应返回 OK。
+        let response = read_directory(State(state.clone()), Path("maya_chen".into()), headers)
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // === create_challenge 限流测试 ===
+    // 无 Redis 时匿名限流放行；未注册的 device_id 返回 NOT_FOUND（而非限流错误）。
+
+    #[tokio::test]
+    async fn create_challenge_passes_rate_limit_without_redis() {
+        let (state, _, device_id) = authenticated_state("maya_chen");
+        let headers = HeaderMap::new();
+        // 无 Redis → 限流放行；device_id 已注册 → 返回 CREATED（挑战已创建）
+        let (status, _) = create_challenge(State(state), Path(device_id), headers).await;
+        assert_eq!(status, StatusCode::CREATED);
     }
 }

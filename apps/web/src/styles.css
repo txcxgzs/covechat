@@ -171,6 +171,40 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .group-empty { display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--muted); }
 .group-empty svg { width: 42px; height: 42px; color: var(--teal); }
 
+/* === 群管理面板：成员列表、邀请策略、退出群组 === */
+.group-admin-panel { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--teal-soft); font-size: 13px; }
+.group-admin-panel > summary { cursor: pointer; padding: 10px 16px; font-weight: 600; color: var(--ink); list-style: none; }
+.group-admin-panel > summary::-webkit-details-marker { display: none; }
+.group-admin-panel > summary::before { content: "▸"; display: inline-block; margin-right: 8px; transition: transform 0.15s; }
+.group-admin-panel[open] > summary::before { transform: rotate(90deg); }
+.group-admin-body { padding: 0 16px 14px; display: grid; gap: 12px; }
+.group-admin-body h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.member-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.member-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: white; border: 1px solid var(--line); border-radius: 7px; }
+.member-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.admin-tag { font-style: normal; font-size: 10px; color: var(--teal); border: 1px solid var(--teal); border-radius: 4px; padding: 1px 4px; }
+.self-tag { color: var(--muted); font-style: normal; }
+.remove-member-btn { border: 0; border-radius: 6px; padding: 4px 8px; background: #fee; color: #c33; font-size: 11px; cursor: pointer; }
+.remove-member-btn:hover { background: #fcc; }
+.invite-policy-section { display: grid; gap: 4px; }
+.invite-policy-section label { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: white; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; font-size: 12px; }
+.leave-group-section { padding-top: 4px; }
+.leave-group-btn { width: 100%; border: 0; border-radius: 7px; padding: 8px; background: #fee; color: #c33; font-size: 12px; font-weight: 600; cursor: pointer; }
+.leave-group-btn:hover { background: #fcc; }
+.admin-badge { font-style: normal; color: var(--teal); }
+
+/* === 附件上传进度条 + 重试栏 === */
+.upload-progress { display: grid; gap: 4px; padding: 8px 12px; background: var(--teal-soft); border-radius: 8px; font-size: 12px; color: var(--ink); }
+.upload-progress-label { font-weight: 600; }
+.upload-progress-bar { height: 6px; background: white; border-radius: 3px; overflow: hidden; border: 1px solid var(--line); }
+.upload-progress-fill { height: 100%; background: var(--teal); transition: width 0.2s ease; }
+.upload-progress-detail { color: var(--muted); font-size: 11px; }
+.upload-retry-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #fee; border-radius: 8px; font-size: 12px; }
+.upload-retry-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #c33; }
+.upload-retry-bar button { border: 0; border-radius: 6px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
+.upload-retry-bar button:first-of-type { background: var(--teal); color: white; }
+.upload-retry-bar button:last-of-type { background: white; color: var(--muted); border: 1px solid var(--line); }
+
 @media (max-width: 1160px) {
   .workspace { grid-template-columns: 76px 300px minmax(400px, 1fr); }
   .navigation { padding-inline: 10px; }
