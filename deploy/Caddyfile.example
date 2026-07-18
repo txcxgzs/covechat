@@ -1,0 +1,7 @@
+# Reverse proxy example when running the development servers directly.
+# Change chat.example.com to your domain.
+chat.example.com {
+    encode zstd gzip
+    reverse_proxy /api/* 127.0.0.1:8080
+    reverse_proxy 127.0.0.1:5173
+}

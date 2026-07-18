@@ -1,0 +1,20 @@
+{
+  "name": "covechat",
+  "private": true,
+  "version": "0.1.0-experimental",
+  "license": "AGPL-3.0-only",
+  "workspaces": [
+    "apps/web",
+    "packages/protocol"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @covechat/web",
+    "dev:api": "cargo run -p covechat-api",
+    "build": "npm run build -ws --if-present",
+    "test": "npm run test -ws --if-present && cargo test --workspace",
+    "check": "npm run typecheck -ws --if-present && cargo check --workspace"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}

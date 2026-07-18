@@ -1,0 +1,12 @@
+{
+  "name": "@covechat/protocol",
+  "version": "0.1.0-experimental",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "devDependencies": { "typescript": "5.8.3" }
+}

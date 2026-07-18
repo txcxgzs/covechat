@@ -1,0 +1,32 @@
+[package]
+name = "covechat-crypto-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+signal-protocol = ["dep:async-trait", "dep:futures-executor", "dep:libsignal-protocol", "dep:rand"]
+
+[dependencies]
+argon2.workspace = true
+async-trait = { version = "0.1", optional = true }
+base64.workspace = true
+chacha20poly1305.workspace = true
+console_error_panic_hook = "0.1"
+ed25519-dalek.workspace = true
+futures-executor = { version = "0.3", optional = true }
+getrandom.workspace = true
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+hkdf.workspace = true
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal.git", rev = "b5121d07c72f9e631f178d907ca892587f64f9e2", optional = true }
+rand = { version = "0.9", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+wasm-bindgen.workspace = true
