@@ -56,7 +56,7 @@ impl SignalStoreState {
         }
     }
 
-    fn identity_pair(&self) -> SignalResult<IdentityKeyPair> {
+    pub(crate) fn identity_pair(&self) -> SignalResult<IdentityKeyPair> {
         IdentityKeyPair::try_from(decode(&self.identity_key_pair)?.as_slice())
     }
 }

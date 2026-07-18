@@ -7,15 +7,18 @@ import initCrypto, {
   wasm_signal_decrypt,
   wasm_signal_encrypt,
   wasm_signal_initiate_session,
+  wasm_signal_refresh_pre_keys,
 } from "../crypto-wasm/covechat_crypto";
 import {
   acknowledgeEnvelope,
   lookupDirectory,
+  publishSignalPreKeys,
   readMailbox,
   sendEnvelope,
 } from "./api";
 import {
   saveSignalState,
+  type PublishedPreKeyBundle,
   type SecureProfile,
   type SignalPreKeyBundle,
 } from "./vault";
@@ -72,7 +75,8 @@ async function conversationId(first: string, second: string): Promise<string> {
 }
 
 function parseBundle(directory: DirectoryResponse["devices"][number]): SignalPreKeyBundle {
-  const bundle = JSON.parse(directory.prekeyBundle) as SignalPreKeyBundle;
+  const parsed = JSON.parse(directory.prekeyBundle) as SignalPreKeyBundle | PublishedPreKeyBundle;
+  const bundle = "signal" in parsed ? parsed.signal : parsed;
   if (
     bundle.version !== 1
     || bundle.ownerName !== directory.deviceId
@@ -189,7 +193,16 @@ export async function receiveEncryptedTexts(
         throw new Error("invalid encrypted message payload");
       }
       profile.signal.state = decrypted.state;
+      if (wrapper.messageType === "prekey") {
+        profile.signal = JSON.parse(wasm_signal_refresh_pre_keys(
+          JSON.stringify(profile.signal.state),
+          BigInt(Date.now()),
+        )) as typeof profile.signal;
+      }
       await saveSignalState(profile);
+      if (wrapper.messageType === "prekey") {
+        await publishSignalPreKeys(profile, session);
+      }
       await acknowledgeEnvelope(envelope.envelopeId, session);
       messages.push({
         envelopeId: envelope.envelopeId,

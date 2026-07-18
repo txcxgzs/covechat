@@ -37,7 +37,7 @@ $env:CARGO_TARGET_DIR = [System.IO.Path]::GetFullPath($TargetDirectory)
 $env:PROTOC = [System.IO.Path]::GetFullPath($protoc)
 cargo build `
     -p covechat-crypto-core `
-    --features signal-protocol `
+    --features signal-protocol,mls-protocol `
     --target wasm32-unknown-unknown `
     --release
 if ($LASTEXITCODE -ne 0) {

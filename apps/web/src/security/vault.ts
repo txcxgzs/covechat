@@ -1,11 +1,14 @@
 import initCrypto, {
   wasm_create_local_vault,
+  wasm_decrypt_mls_state,
   wasm_decrypt_signal_state,
   wasm_derive_recovery_signing_keypair,
   wasm_generate_recovery_secret,
   wasm_generate_signing_keypair,
   wasm_open_local_vault,
   wasm_encrypt_signal_state,
+  wasm_encrypt_mls_state,
+  wasm_mls_create_device,
   wasm_signal_create_device,
   wasm_sign_payload,
 } from "../crypto-wasm/covechat_crypto";
@@ -14,6 +17,7 @@ const DATABASE = "covechat-secure";
 const STORE = "vault";
 const VAULT_KEY = "primary";
 const SIGNAL_STATE_KEY = "signal-state";
+const MLS_STATE_KEY = "mls-state";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -43,6 +47,26 @@ export type SignalDeviceBootstrap = {
   preKeyBundle: SignalPreKeyBundle;
 };
 
+export type MlsDeviceBootstrap = {
+  state: Record<string, unknown>;
+  keyPackage: string;
+  groups?: MlsGroupMetadata[];
+};
+
+export type MlsGroupMetadata = {
+  groupId: string;
+  conversationId: string;
+  name: string;
+  epoch: number;
+  memberDeviceIds: string[];
+};
+
+export type PublishedPreKeyBundle = {
+  version: 1;
+  signal: SignalPreKeyBundle;
+  mlsKeyPackage: string;
+};
+
 export type SecureProfile = {
   version: 1;
   username: string;
@@ -51,6 +75,7 @@ export type SecureProfile = {
   deviceId: string;
   deviceKeys: SigningKeyPair;
   signal: SignalDeviceBootstrap;
+  mls: MlsDeviceBootstrap;
   signalPreKeyVersion: number;
   signalPublished: boolean;
   recoverySecret: string;
@@ -67,6 +92,13 @@ type StoredVault = {
 
 type StoredSignalState = {
   id: typeof SIGNAL_STATE_KEY;
+  version: 1;
+  encryptedState: string;
+  updatedAt: number;
+};
+
+type StoredMlsState = {
+  id: typeof MLS_STATE_KEY;
   version: 1;
   encryptedState: string;
   updatedAt: number;
@@ -142,6 +174,9 @@ export async function createSecureProfile(
   const signal = JSON.parse(
     wasm_signal_create_device(deviceId, 1),
   ) as SignalDeviceBootstrap;
+  const mls = JSON.parse(
+    wasm_mls_create_device(`${normalized}/${deviceId}`),
+  ) as MlsDeviceBootstrap;
   const profile: SecureProfile = {
     version: 1,
     username: normalized,
@@ -155,6 +190,7 @@ export async function createSecureProfile(
     deviceId,
     deviceKeys: JSON.parse(wasm_generate_signing_keypair()) as SigningKeyPair,
     signal,
+    mls,
     signalPreKeyVersion: 1,
     signalPublished: false,
     recoverySecret,
@@ -179,6 +215,7 @@ export async function saveSecureProfile(
     updatedAt: Date.now(),
   } satisfies StoredVault));
   await saveSignalState(profile);
+  await saveMlsState(profile);
 }
 
 export async function saveSignalState(profile: SecureProfile): Promise<void> {
@@ -198,6 +235,23 @@ export async function saveSignalState(profile: SecureProfile): Promise<void> {
   } satisfies StoredSignalState));
 }
 
+export async function saveMlsState(profile: SecureProfile): Promise<void> {
+  await ensureCrypto();
+  const plaintext = toBase64Url(
+    encoder.encode(JSON.stringify(profile.mls)),
+  );
+  const encryptedState = wasm_encrypt_mls_state(
+    profile.deviceKeys.privateKey,
+    plaintext,
+  );
+  await transaction<IDBValidKey>("readwrite", (store) => store.put({
+    id: MLS_STATE_KEY,
+    version: 1,
+    encryptedState,
+    updatedAt: Date.now(),
+  } satisfies StoredMlsState));
+}
+
 async function restoreSignalState(profile: SecureProfile): Promise<void> {
   const record = await transaction<StoredSignalState | undefined>(
     "readonly",
@@ -211,6 +265,21 @@ async function restoreSignalState(profile: SecureProfile): Promise<void> {
   profile.signal.state = JSON.parse(
     decoder.decode(fromBase64Url(plaintext)),
   ) as Record<string, unknown>;
+}
+
+async function restoreMlsState(profile: SecureProfile): Promise<void> {
+  const record = await transaction<StoredMlsState | undefined>(
+    "readonly",
+    (store) => store.get(MLS_STATE_KEY),
+  );
+  if (!record || record.version !== 1) return;
+  const plaintext = wasm_decrypt_mls_state(
+    profile.deviceKeys.privateKey,
+    record.encryptedState,
+  );
+  profile.mls = JSON.parse(
+    decoder.decode(fromBase64Url(plaintext)),
+  ) as MlsDeviceBootstrap;
 }
 
 export async function unlockSecureProfile(passphrase: string): Promise<SecureProfile> {
@@ -238,6 +307,14 @@ export async function unlockSecureProfile(passphrase: string): Promise<SecurePro
   } else {
     if (!profile.signalPreKeyVersion) profile.signalPreKeyVersion = 1;
     await restoreSignalState(profile);
+  }
+  if (!profile.mls) {
+    profile.mls = JSON.parse(
+      wasm_mls_create_device(`${profile.username}/${profile.deviceId}`),
+    ) as MlsDeviceBootstrap;
+    profile.signalPublished = false;
+  } else {
+    await restoreMlsState(profile);
   }
   return profile;
 }
@@ -286,6 +363,9 @@ export async function rotateRecoveredDevice(
     signal: JSON.parse(
       wasm_signal_create_device(deviceId, 1),
     ) as SignalDeviceBootstrap,
+    mls: JSON.parse(
+      wasm_mls_create_device(`${profile.username}/${deviceId}`),
+    ) as MlsDeviceBootstrap,
     signalPreKeyVersion: 1,
     signalPublished: false,
     createdAt: Math.floor(Date.now() / 1000),

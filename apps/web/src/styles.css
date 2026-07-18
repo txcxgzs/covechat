@@ -136,6 +136,29 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .preview-notice strong { font-size: 12px; }
 .preview-notice span { color: #5d6e7c; font-size: 11px; }
 .preview-notice a { color: var(--warning); font-size: 12px; text-decoration: none; font-weight: 700; }
+.group-workspace { grid-column: 2 / -1; display: grid; grid-template-columns: 300px minmax(0, 1fr); min-width: 0; background: var(--surface); }
+.group-sidebar { border-right: 1px solid var(--line); padding: 24px 18px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.group-sidebar header { display: grid; gap: 4px; }
+.group-sidebar header h1 { margin: 0; font-size: 24px; }
+.group-sidebar header span, .group-list small { color: var(--muted); font-size: 12px; }
+.group-sidebar form { display: grid; gap: 8px; }
+.group-sidebar input, .group-invite input { min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: white; color: var(--ink); }
+.group-sidebar form button, .group-invite button { border: 0; border-radius: 9px; padding: 10px 12px; background: var(--teal); color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 7px; }
+.group-sidebar form button svg { width: 16px; }
+.group-list { display: grid; gap: 7px; overflow: auto; }
+.group-list > button { border: 1px solid transparent; border-radius: 10px; padding: 11px; background: transparent; color: var(--ink); display: flex; align-items: center; gap: 10px; text-align: left; }
+.group-list > button.selected { background: var(--teal-soft); border-color: #b8dedc; }
+.group-list > button > svg { width: 19px; color: var(--teal); }
+.group-list > button span { display: grid; gap: 3px; min-width: 0; }
+.group-list > button strong { overflow: hidden; text-overflow: ellipsis; }
+.group-list > p { color: var(--muted); font-size: 13px; }
+.group-chat { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; }
+.group-invite { margin-left: auto; display: flex; gap: 8px; }
+.group-invite button { white-space: nowrap; }
+.group-composer { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.group-composer .send { width: 44px; height: 44px; }
+.group-empty { display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--muted); }
+.group-empty svg { width: 42px; height: 42px; color: var(--teal); }
 
 @media (max-width: 1160px) {
   .workspace { grid-template-columns: 76px 300px minmax(400px, 1fr); }
@@ -144,6 +167,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
   .brand, .nav-item, .profile { justify-content: center; }
   .security-panel { position: fixed; inset: 0 0 68px auto; width: 310px; z-index: 4; transform: translateX(101%); transition: transform .2s ease; box-shadow: -12px 0 32px #0c24322a; }
   .security-panel.open { transform: translateX(0); }
+  .group-workspace { grid-template-columns: 230px minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
   .workspace { grid-template-columns: 1fr; }
@@ -156,4 +180,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
   .bubble { max-width: 84%; }
   .preview-notice { grid-template-columns: auto 1fr auto; padding-inline: 14px; }
   .preview-notice a { display: none; }
+  .group-workspace { grid-column: 1 / -1; grid-template-columns: 1fr; min-height: 100vh; }
+  .group-sidebar { display: none; }
+  .group-invite { max-width: 210px; }
 }

@@ -34,7 +34,8 @@ state, recovery secrets, local history and cloud backups.
 
 ## Current 0.1 limitation
 
-The local vault, recovery-key derivation and generic encrypted blob boundary are
-implemented. Signal and MLS adapters remain deliberately unavailable until
-official vectors, interoperability tests, persistence tests and community
-review are complete. The UI therefore must not transmit real messages.
+The local vault, recovery-key derivation, official libsignal adapter and
+OpenMLS adapter are implemented behind the Rust/WASM boundary. They fail
+closed and persist encrypted protocol state. The project remains experimental
+until broader interoperability testing, community review and an independent
+security audit are complete.

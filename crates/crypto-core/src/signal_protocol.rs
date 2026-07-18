@@ -145,6 +145,104 @@ pub fn create_device(local_name: &str, device_id: u32) -> Result<SignalDeviceBoo
     })
 }
 
+pub fn refresh_pre_keys(
+    mut state: SignalStoreState,
+    now_millis: u64,
+) -> Result<SignalDeviceBootstrap, String> {
+    block_on(async {
+        let mut rng = OsRng.unwrap_err();
+        let identity = state.identity_pair().map_err(|error| error.to_string())?;
+        let pre_key_id = PreKeyId::from(
+            state
+                .pre_keys
+                .keys()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        let pre_key = KeyPair::generate(&mut rng);
+        state
+            .save_pre_key(pre_key_id, &PreKeyRecord::new(pre_key_id, &pre_key))
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let signed_pre_key_id = SignedPreKeyId::from(
+            state
+                .signed_pre_keys
+                .keys()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        let signed_pre_key = KeyPair::generate(&mut rng);
+        let signed_signature = identity
+            .private_key()
+            .calculate_signature(&signed_pre_key.public_key.serialize(), &mut rng)
+            .map_err(|error| error.to_string())?;
+        state
+            .save_signed_pre_key(
+                signed_pre_key_id,
+                &SignedPreKeyRecord::new(
+                    signed_pre_key_id,
+                    Timestamp::from_epoch_millis(now_millis),
+                    &signed_pre_key,
+                    &signed_signature,
+                ),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let kyber_pre_key_id = KyberPreKeyId::from(
+            state
+                .kyber_pre_keys
+                .keys()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1),
+        );
+        let kyber_pre_key = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut rng);
+        let kyber_signature = identity
+            .private_key()
+            .calculate_signature(&kyber_pre_key.public_key.serialize(), &mut rng)
+            .map_err(|error| error.to_string())?;
+        state
+            .save_kyber_pre_key(
+                kyber_pre_key_id,
+                &KyberPreKeyRecord::new(
+                    kyber_pre_key_id,
+                    Timestamp::from_epoch_millis(now_millis),
+                    &kyber_pre_key,
+                    &kyber_signature,
+                ),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+
+        Ok(SignalDeviceBootstrap {
+            pre_key_bundle: SignalPreKeyBundle {
+                version: 1,
+                owner_name: state.local_name.clone(),
+                device_id: state.device_id,
+                registration_id: state.registration_id,
+                identity_key: URL_SAFE_NO_PAD.encode(identity.identity_key().serialize()),
+                pre_key_id: pre_key_id.into(),
+                pre_key_public: URL_SAFE_NO_PAD.encode(pre_key.public_key.serialize()),
+                signed_pre_key_id: signed_pre_key_id.into(),
+                signed_pre_key_public: URL_SAFE_NO_PAD
+                    .encode(signed_pre_key.public_key.serialize()),
+                signed_pre_key_signature: URL_SAFE_NO_PAD.encode(signed_signature),
+                kyber_pre_key_id: kyber_pre_key_id.into(),
+                kyber_pre_key_public: URL_SAFE_NO_PAD.encode(kyber_pre_key.public_key.serialize()),
+                kyber_pre_key_signature: URL_SAFE_NO_PAD.encode(kyber_signature),
+            },
+            state,
+        })
+    })
+}
+
 fn decode_bundle(bundle: &SignalPreKeyBundle) -> Result<PreKeyBundle, String> {
     if bundle.version != 1 {
         return Err("unsupported Signal bundle version".into());
@@ -529,6 +627,25 @@ mod tests {
             )
             .is_err(),
             "a changed identity must not silently replace the trusted identity"
+        );
+    }
+
+    #[test]
+    fn one_time_pre_keys_rotate_without_identity_change() {
+        let initial = super::create_device("alice", 1).expect("device");
+        let rotated =
+            super::refresh_pre_keys(initial.state.clone(), 1_700_000_000_000).expect("rotate");
+        assert_ne!(
+            initial.pre_key_bundle.pre_key_public,
+            rotated.pre_key_bundle.pre_key_public
+        );
+        assert_ne!(
+            initial.pre_key_bundle.kyber_pre_key_public,
+            rotated.pre_key_bundle.kyber_pre_key_public
+        );
+        assert_eq!(
+            initial.pre_key_bundle.identity_key,
+            rotated.pre_key_bundle.identity_key
         );
     }
 }

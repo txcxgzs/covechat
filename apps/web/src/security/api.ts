@@ -11,6 +11,7 @@ import {
   signWithAccount,
   signWithDevice,
   signRecoveryChallenge,
+  type PublishedPreKeyBundle,
   type SecureProfile,
 } from "./vault";
 
@@ -49,8 +50,16 @@ function devicePayload(profile: SecureProfile, prekeyBundle: string): Uint8Array
   ]));
 }
 
+function publishedPreKeyBundle(profile: SecureProfile): string {
+  return JSON.stringify({
+    version: 1,
+    signal: profile.signal.preKeyBundle,
+    mlsKeyPackage: profile.mls.keyPackage,
+  } satisfies PublishedPreKeyBundle);
+}
+
 export async function provisionProfile(profile: SecureProfile): Promise<AuthSession> {
-  const prekeyBundle = JSON.stringify(profile.signal.preKeyBundle);
+  const prekeyBundle = publishedPreKeyBundle(profile);
   const authorizationSignature = await signWithAccount(profile, devicePayload(profile, prekeyBundle));
   const response = await fetch("/api/v1/onboarding", {
     method: "POST",
@@ -102,7 +111,7 @@ export async function publishSignalPreKeys(
   session: AuthSession,
 ): Promise<void> {
   const prekeyVersion = profile.signalPreKeyVersion + 1;
-  const prekeyBundle = JSON.stringify(profile.signal.preKeyBundle);
+  const prekeyBundle = publishedPreKeyBundle(profile);
   const updatedAt = Math.floor(Date.now() / 1000);
   const signature = await signWithDevice(
     profile,

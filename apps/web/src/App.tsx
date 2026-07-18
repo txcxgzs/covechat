@@ -14,29 +14,41 @@ import {
   encryptAndUploadAttachment,
 } from "./security/attachments";
 import {
+  addGroupMember,
+  createEncryptedGroup,
+  listEncryptedGroups,
+  receiveEncryptedGroupMessages,
+  sendEncryptedGroupText,
+} from "./security/groups";
+import {
   receiveEncryptedTexts,
   sendEncryptedText,
   subscribeEncryptedMailbox,
 } from "./security/signal";
 
-function Navigation({ locale, t, onLocaleChange, profileName }: {
+function Navigation({ locale, t, onLocaleChange, profileName, activeView, onViewChange }: {
   locale: Locale;
   t: Translate;
   onLocaleChange: () => void;
   profileName?: string;
+  activeView: "messages" | "groups";
+  onViewChange: (view: "messages" | "groups") => void;
 }) {
   const nav = [
-    { label: t("messages"), icon: MessageCircle, active: true },
-    { label: t("contacts"), icon: UserRound },
-    { label: t("groups"), icon: UsersRound },
-    { label: t("settings"), icon: Settings },
+    { id: "messages" as const, label: t("messages"), icon: MessageCircle },
+    { id: "groups" as const, label: t("groups"), icon: UsersRound },
   ];
   return (
     <nav className="navigation" aria-label="Primary">
       <div className="brand"><ShieldCheck aria-hidden="true" /><span>CoveChat</span></div>
       <div className="nav-items">
-        {nav.map(({ label, icon: Icon, active }) => (
-          <button className={active ? "nav-item active" : "nav-item"} key={label} title={label}>
+        {nav.map(({ id, label, icon: Icon }) => (
+          <button
+            className={activeView === id ? "nav-item active" : "nav-item"}
+            key={id}
+            title={label}
+            onClick={() => onViewChange(id)}
+          >
             <Icon aria-hidden="true" /><span>{label}</span>
           </button>
         ))}
@@ -298,6 +310,188 @@ function Chat({ locale, onDetails, profile, session, t }: {
   );
 }
 
+function GroupWorkspace({ locale, profile, session, t }: {
+  locale: Locale;
+  profile: SecureProfile;
+  session: AuthSession;
+  t: Translate;
+}) {
+  const [availableGroups, setAvailableGroups] = useState(
+    () => [...listEncryptedGroups(profile)],
+  );
+  const [selectedGroupId, setSelectedGroupId] = useState(
+    () => availableGroups[0]?.groupId ?? "",
+  );
+  const [groupName, setGroupName] = useState("");
+  const [inviteUsername, setInviteUsername] = useState("");
+  const [draft, setDraft] = useState("");
+  const [status, setStatus] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const selected = availableGroups.find((group) => group.groupId === selectedGroupId);
+
+  function refreshGroups() {
+    const next = [...listEncryptedGroups(profile)];
+    setAvailableGroups(next);
+    setSelectedGroupId((current) => current || next[0]?.groupId || "");
+  }
+
+  useEffect(() => {
+    let active = true;
+    async function refresh() {
+      const received = await receiveEncryptedGroupMessages(profile, session);
+      if (!active) return;
+      refreshGroups();
+      setMessages((current) => [
+        ...current,
+        ...received.map((message) => ({
+          id: message.envelopeId,
+          from: "them" as const,
+          text: message.body,
+          time: new Intl.DateTimeFormat(locale, {
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(new Date(message.createdAt)),
+          delivered: true,
+        })),
+      ]);
+    }
+    void refresh();
+    const unsubscribe = subscribeEncryptedMailbox(session, () => void refresh());
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [locale, profile, session]);
+
+  async function createGroup(event: FormEvent) {
+    event.preventDefault();
+    try {
+      const created = await createEncryptedGroup(profile, groupName);
+      refreshGroups();
+      setSelectedGroupId(created.groupId);
+      setGroupName("");
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : t("vaultError"));
+    }
+  }
+
+  async function invite(event: FormEvent) {
+    event.preventDefault();
+    if (!selected) return;
+    try {
+      await addGroupMember(profile, session, selected.groupId, inviteUsername);
+      refreshGroups();
+      setInviteUsername("");
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : t("vaultError"));
+    }
+  }
+
+  async function send(event: FormEvent) {
+    event.preventDefault();
+    if (!selected || !draft.trim()) return;
+    const body = draft.trim();
+    try {
+      await sendEncryptedGroupText(profile, session, selected.groupId, body);
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        from: "me",
+        text: body,
+        time: new Intl.DateTimeFormat(locale, {
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(new Date()),
+        delivered: true,
+      }]);
+      setDraft("");
+      setStatus("");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : t("vaultError"));
+    }
+  }
+
+  return (
+    <main className="group-workspace">
+      <aside className="group-sidebar">
+        <header><h1>{t("groups")}</h1><span>{t("mlsProtocol")}</span></header>
+        <form onSubmit={(event) => void createGroup(event)}>
+          <input
+            aria-label={t("groupName")}
+            placeholder={t("groupName")}
+            required
+            maxLength={80}
+            value={groupName}
+            onChange={(event) => setGroupName(event.target.value)}
+          />
+          <button><Plus /> {t("createGroup")}</button>
+        </form>
+        <div className="group-list">
+          {availableGroups.map((group) => (
+            <button
+              className={group.groupId === selectedGroupId ? "selected" : ""}
+              key={group.groupId}
+              onClick={() => setSelectedGroupId(group.groupId)}
+            >
+              <UsersRound />
+              <span>
+                <strong>{group.name}</strong>
+                <small>{t("groupEpoch")} {group.epoch}</small>
+              </span>
+            </button>
+          ))}
+          {availableGroups.length === 0 ? <p>{t("noGroups")}</p> : null}
+        </div>
+      </aside>
+      <section className="group-chat">
+        {selected ? (
+          <>
+            <header className="chat-header">
+              <span className="avatar"><UsersRound /></span>
+              <div className="chat-title">
+                <strong>{selected.name}</strong>
+                <span><LockKeyhole /> {t("mlsProtocol")} · {selected.memberDeviceIds.length} {t("groupMembers")}</span>
+              </div>
+              <form className="group-invite" onSubmit={(event) => void invite(event)}>
+                <input
+                  aria-label={t("groupMemberUsername")}
+                  placeholder={t("groupMemberUsername")}
+                  pattern="[a-z0-9_]{3,32}"
+                  required
+                  value={inviteUsername}
+                  onChange={(event) => setInviteUsername(event.target.value.toLowerCase())}
+                />
+                <button>{t("addMember")}</button>
+              </form>
+            </header>
+            <section className="messages" aria-live="polite">
+              {messages.map((message) => (
+                <article className={`message-row ${message.from}`} key={message.id}>
+                  <div className="bubble">
+                    <p>{message.text}</p>
+                    <footer><time>{message.time}</time><CheckCheck /></footer>
+                  </div>
+                </article>
+              ))}
+              {status ? <p className="attachment-status" role="status">{status}</p> : null}
+            </section>
+            <form className="composer group-composer" onSubmit={(event) => void send(event)}>
+              <textarea
+                aria-label={t("messageMaya")}
+                placeholder={t("messageMaya")}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+              />
+              <button className="send" aria-label={t("sendMessage")} disabled={!draft.trim()}><Send /></button>
+            </form>
+          </>
+        ) : <div className="group-empty"><UsersRound /><p>{t("selectGroup")}</p></div>}
+      </section>
+    </main>
+  );
+}
+
 function SecurityPanel({ open, onClose, t }: { open: boolean; onClose: () => void; t: Translate }) {
   const [verified, setVerified] = useState(false);
   return (
@@ -322,7 +516,7 @@ function SecurityPanel({ open, onClose, t }: { open: boolean; onClose: () => voi
       </section>
       <section className="security-section details">
         <h3><LockKeyhole />{t("encryptionDetails")}</h3>
-        <dl><dt>{t("protocol")}</dt><dd>{t("unavailablePreview")}</dd><dt>{t("identityKey")}</dt><dd>3A:7F:2B:9C:41:0E:7D:6A</dd></dl>
+        <dl><dt>{t("protocol")}</dt><dd>Signal PQXDH + Triple Ratchet</dd><dt>{t("identityKey")}</dt><dd>{t("unavailablePreview")}</dd></dl>
         <p className="fail-closed">{t("failClosed")}</p>
       </section>
     </aside>
@@ -336,27 +530,41 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
     () => window.matchMedia("(min-width: 1161px)").matches,
   );
   const [noticeOpen, setNoticeOpen] = useState(true);
+  const [activeView, setActiveView] = useState<"messages" | "groups">("messages");
   useEffect(() => {
     localStorage.setItem("covechat.locale", locale);
     document.documentElement.lang = locale;
     document.title = locale === "zh-CN"
-      ? "CoveChat — 实验性安全预览"
-      : "CoveChat — Experimental security preview";
+      ? "CoveChat — 实验性安全软件"
+      : "CoveChat — Experimental security software";
   }, [locale]);
   return (
     <div className="app">
       <div className="workspace">
-        <Navigation locale={locale} t={t} profileName={profile.username} onLocaleChange={() => setLocale((current) => current === "zh-CN" ? "en" : "zh-CN")} />
-        <ConversationList key={`conversations-${locale}`} locale={locale} t={t} />
-        <Chat
-          key={`chat-${locale}`}
+        <Navigation
+          activeView={activeView}
           locale={locale}
-          profile={profile}
-          session={session}
-          onDetails={() => setDetailsOpen(true)}
           t={t}
+          profileName={profile.username}
+          onLocaleChange={() => setLocale((current) => current === "zh-CN" ? "en" : "zh-CN")}
+          onViewChange={setActiveView}
         />
-        <SecurityPanel open={detailsOpen} onClose={() => setDetailsOpen(false)} t={t} />
+        {activeView === "messages" ? (
+          <>
+            <ConversationList key={`conversations-${locale}`} locale={locale} t={t} />
+            <Chat
+              key={`chat-${locale}`}
+              locale={locale}
+              profile={profile}
+              session={session}
+              onDetails={() => setDetailsOpen(true)}
+              t={t}
+            />
+            <SecurityPanel open={detailsOpen} onClose={() => setDetailsOpen(false)} t={t} />
+          </>
+        ) : (
+          <GroupWorkspace locale={locale} profile={profile} session={session} t={t} />
+        )}
       </div>
       {noticeOpen ? (
         <aside className="preview-notice">

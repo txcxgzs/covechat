@@ -9,38 +9,54 @@
 
 - 可安装 React/Vite PWA，中英双语，默认中文
 - 用户名注册、设备身份、恢复码、本地加密保险库
-- 单聊消息邮箱、WebSocket 在线投递和离线密文队列
+- 单聊与最多 50 个成员设备的 RFC 9420 MLS 小群
+- 消息邮箱、WebSocket 在线投递和离线密文队列
 - 官方 libsignal 协议核心的 PQXDH、后量子预密钥与逐消息 Ratchet
 - 客户端加密云备份、回滚链和设备恢复
 - 客户端分块加密附件及 S3 兼容对象存储
 - PostgreSQL 持久化、MinIO、Redis 和反向代理一键部署
 
-暂未完成生产级验收的功能包括：MLS 小群、多设备完整交互、举报管理和独立安全审计。
+暂未完成生产级验收的功能包括：多设备完整交互、举报管理和独立安全审计。
 
-## 一键部署
+## Linux 一键部署
 
-需要安装并启动 Docker Desktop。PowerShell 中运行：
+需要安装 Docker Engine 和 Compose 插件：
 
-```powershell
-.\deploy.ps1
+```bash
+chmod +x deploy.sh
+./deploy.sh
 ```
 
-脚本会生成包含随机基础设施密码的 `.env`，构建并启动 Web、API、
-PostgreSQL、Redis 和 MinIO。默认仅在本机监听：
+自定义反向代理上游端口：
+
+```bash
+./deploy.sh --port 9000
+```
+
+脚本会使用系统安全随机源生成权限受限的 `.env`，构建并启动 Web、API、
+PostgreSQL、Redis 和 MinIO。默认仅在服务器回环地址监听：
 
 ```text
 http://127.0.0.1:8088
 ```
 
-自定义反向代理上游端口：
+随后将 Nginx、Caddy 或面板反向代理的 HTTP/WebSocket 上游设置为
+`http://127.0.0.1:8088`。不要将 API、PostgreSQL、Redis 或 MinIO
+端口直接暴露到公网。示例见 [deploy/Caddyfile.example](deploy/Caddyfile.example)。
+
+## Windows 一键部署
+
+安装并启动 Docker Desktop 后，在 PowerShell 中运行：
+
+```powershell
+.\deploy.ps1
+```
+
+自定义端口：
 
 ```powershell
 .\deploy.ps1 -Port 9000
 ```
-
-随后将 Nginx、Caddy 或面板反向代理的 HTTP/WebSocket 上游设置为
-`http://127.0.0.1:9000`。不要将 API、PostgreSQL、Redis 或 MinIO
-端口直接暴露到公网。示例见 [deploy/Caddyfile.example](deploy/Caddyfile.example)。
 
 常用维护命令：
 
@@ -74,7 +90,9 @@ docker compose --env-file .env -f compose.deploy.yml down
 
 CoveChat 不会在解密失败时降级为明文。服务端只转发带版本的不透明密文信封，
 附件密钥、原文件名和消息明文不会进入服务端模型。官方 libsignal 依赖固定到
-明确提交，并通过 Rust/WASM 边界调用；浏览器端状态使用设备密钥加密后保存。
+明确提交，MLS 使用 OpenMLS 0.8.1；两者均通过 Rust/WASM 边界调用。浏览器端
+Ratchet 与 MLS 状态使用相互域隔离的设备状态密钥加密后保存。一次性 Signal
+预密钥和 MLS KeyPackage 使用后自动轮换并重新发布。
 
 这些实现和测试不等同于独立密码学审计。任何公开部署都必须保留
 `0.x experimental` 标识。详情见 [SECURITY.md](SECURITY.md) 和

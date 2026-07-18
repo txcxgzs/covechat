@@ -10,6 +10,13 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 signal-protocol = ["dep:async-trait", "dep:futures-executor", "dep:libsignal-protocol", "dep:rand"]
+mls-protocol = [
+    "dep:openmls",
+    "dep:openmls_basic_credential",
+    "dep:openmls_memory_storage",
+    "dep:openmls_rust_crypto",
+    "dep:openmls_traits",
+]
 
 [dependencies]
 argon2.workspace = true
@@ -23,6 +30,11 @@ getrandom.workspace = true
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 hkdf.workspace = true
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal.git", rev = "b5121d07c72f9e631f178d907ca892587f64f9e2", optional = true }
+openmls = { workspace = true, features = ["js"], optional = true }
+openmls_basic_credential = { workspace = true, optional = true }
+openmls_memory_storage = { workspace = true, optional = true }
+openmls_rust_crypto = { workspace = true, optional = true }
+openmls_traits = { workspace = true, optional = true }
 rand = { version = "0.9", optional = true }
 serde.workspace = true
 serde_json.workspace = true

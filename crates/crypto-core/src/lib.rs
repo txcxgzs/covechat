@@ -13,15 +13,26 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
+#[cfg(feature = "mls-protocol")]
+mod mls_protocol;
 #[cfg(feature = "signal-protocol")]
 mod signal_protocol;
 #[cfg(feature = "signal-protocol")]
 mod signal_store;
+#[cfg(feature = "mls-protocol")]
+pub use mls_protocol::{
+    MlsCommitResult, MlsDevice, MlsGroupResult, MlsMessageResult, MlsProcessedResult, MlsState,
+    add_member as mls_add_member, create_device as mls_create_device,
+    create_group as mls_create_group, encrypt_message as mls_encrypt_message,
+    join_group as mls_join_group, process_message as mls_process_message,
+    refresh_key_package as mls_refresh_key_package, remove_member as mls_remove_member,
+};
 #[cfg(feature = "signal-protocol")]
 pub use signal_protocol::{
     SignalDecryptResult, SignalDeviceBootstrap, SignalEncryptResult, SignalPreKeyBundle,
     create_device as signal_create_device, decrypt_message as signal_decrypt_message,
     encrypt_message as signal_encrypt_message, initiate_session as signal_initiate_session,
+    refresh_pre_keys as signal_refresh_pre_keys,
 };
 #[cfg(feature = "signal-protocol")]
 pub use signal_store::SignalStoreState;
@@ -34,6 +45,8 @@ const ATTACHMENT_INFO: &[u8] = b"covechat/v1/attachment-key";
 const RECOVERY_AUTH_INFO: &[u8] = b"covechat/v1/recovery-auth-key";
 const SIGNAL_STATE_INFO: &[u8] = b"covechat/v1/signal-state-key";
 const SIGNAL_STATE_AAD: &[u8] = b"covechat/v1/signal-state";
+const MLS_STATE_INFO: &[u8] = b"covechat/v1/mls-state-key";
+const MLS_STATE_AAD: &[u8] = b"covechat/v1/mls-state";
 const VAULT_AAD: &[u8] = b"covechat/v1/local-vault";
 
 #[derive(Debug, Error)]
@@ -280,7 +293,10 @@ pub fn decrypt_blob(
     Ok(Zeroizing::new(plaintext))
 }
 
-fn derive_signal_state_key(device_private_key: &str) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+fn derive_device_state_key(
+    device_private_key: &str,
+    info: &[u8],
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     let key_material = URL_SAFE_NO_PAD
         .decode(device_private_key)
         .map_err(|_| CryptoError::InvalidInput)?;
@@ -289,7 +305,7 @@ fn derive_signal_state_key(device_private_key: &str) -> Result<Zeroizing<[u8; 32
     }
     let mut key = Zeroizing::new([0_u8; 32]);
     Hkdf::<Sha256>::new(None, &key_material)
-        .expand(SIGNAL_STATE_INFO, key.as_mut())
+        .expand(info, key.as_mut())
         .map_err(|_| CryptoError::KeyDerivation)?;
     Ok(key)
 }
@@ -298,7 +314,7 @@ pub fn encrypt_signal_state(
     device_private_key: &str,
     plaintext: &[u8],
 ) -> Result<EncryptedBlob, CryptoError> {
-    let key = derive_signal_state_key(device_private_key)?;
+    let key = derive_device_state_key(device_private_key, SIGNAL_STATE_INFO)?;
     encrypt_blob(&key, plaintext, SIGNAL_STATE_AAD)
 }
 
@@ -306,8 +322,24 @@ pub fn decrypt_signal_state(
     device_private_key: &str,
     blob: &EncryptedBlob,
 ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-    let key = derive_signal_state_key(device_private_key)?;
+    let key = derive_device_state_key(device_private_key, SIGNAL_STATE_INFO)?;
     decrypt_blob(&key, blob, SIGNAL_STATE_AAD)
+}
+
+pub fn encrypt_mls_state(
+    device_private_key: &str,
+    plaintext: &[u8],
+) -> Result<EncryptedBlob, CryptoError> {
+    let key = derive_device_state_key(device_private_key, MLS_STATE_INFO)?;
+    encrypt_blob(&key, plaintext, MLS_STATE_AAD)
+}
+
+pub fn decrypt_mls_state(
+    device_private_key: &str,
+    blob: &EncryptedBlob,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let key = derive_device_state_key(device_private_key, MLS_STATE_INFO)?;
+    decrypt_blob(&key, blob, MLS_STATE_AAD)
 }
 
 pub fn create_local_vault(passphrase: &str, plaintext: &[u8]) -> Result<LocalVault, CryptoError> {
@@ -403,6 +435,16 @@ pub fn wasm_signal_create_device(local_name: &str, device_id: u32) -> Result<Str
 
 #[cfg(all(target_arch = "wasm32", feature = "signal-protocol"))]
 #[wasm_bindgen]
+pub fn wasm_signal_refresh_pre_keys(state_json: &str, now_millis: u64) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    let state: SignalStoreState =
+        serde_json::from_str(state_json).map_err(|_| js_error(CryptoError::InvalidInput))?;
+    let value = signal_refresh_pre_keys(state, now_millis).map_err(signal_js_error)?;
+    serde_json::to_string(&value).map_err(|_| js_error(CryptoError::InvalidInput))
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "signal-protocol"))]
+#[wasm_bindgen]
 pub fn wasm_signal_initiate_session(
     state_json: &str,
     remote_bundle_json: &str,
@@ -461,6 +503,111 @@ pub fn wasm_signal_decrypt(
     serde_json::to_string(&value).map_err(|_| js_error(CryptoError::InvalidInput))
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+fn mls_js_error(error: String) -> JsValue {
+    JsValue::from_str(&error)
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+fn parse_mls_state(state_json: &str) -> Result<MlsState, JsValue> {
+    serde_json::from_str(state_json).map_err(|_| js_error(CryptoError::InvalidInput))
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+fn serialize_mls<T: Serialize>(value: &T) -> Result<String, JsValue> {
+    serde_json::to_string(value).map_err(|_| js_error(CryptoError::InvalidInput))
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_create_device(identity: &str) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    serialize_mls(&mls_create_device(identity).map_err(mls_js_error)?)
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_refresh_key_package(state_json: &str) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    serialize_mls(&mls_refresh_key_package(parse_mls_state(state_json)?).map_err(mls_js_error)?)
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_create_group(state_json: &str, group_id_base64: &str) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    let group_id = URL_SAFE_NO_PAD
+        .decode(group_id_base64)
+        .map_err(|_| js_error(CryptoError::InvalidInput))?;
+    serialize_mls(&mls_create_group(parse_mls_state(state_json)?, &group_id).map_err(mls_js_error)?)
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_add_member(
+    state_json: &str,
+    group_id: &str,
+    key_package: &str,
+) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    serialize_mls(
+        &mls_add_member(parse_mls_state(state_json)?, group_id, key_package)
+            .map_err(mls_js_error)?,
+    )
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_join_group(state_json: &str, welcome: &str) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    serialize_mls(&mls_join_group(parse_mls_state(state_json)?, welcome).map_err(mls_js_error)?)
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_encrypt(
+    state_json: &str,
+    group_id: &str,
+    plaintext_base64: &str,
+) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    let plaintext = URL_SAFE_NO_PAD
+        .decode(plaintext_base64)
+        .map_err(|_| js_error(CryptoError::InvalidInput))?;
+    serialize_mls(
+        &mls_encrypt_message(parse_mls_state(state_json)?, group_id, &plaintext)
+            .map_err(mls_js_error)?,
+    )
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_process(
+    state_json: &str,
+    group_id: &str,
+    ciphertext: &str,
+) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    serialize_mls(
+        &mls_process_message(parse_mls_state(state_json)?, group_id, ciphertext)
+            .map_err(mls_js_error)?,
+    )
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_remove_member(
+    state_json: &str,
+    group_id: &str,
+    leaf_index: u32,
+) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    serialize_mls(
+        &mls_remove_member(parse_mls_state(state_json)?, group_id, leaf_index)
+            .map_err(mls_js_error)?,
+    )
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn wasm_encrypt_signal_state(
@@ -483,6 +630,31 @@ pub fn wasm_decrypt_signal_state(
     let blob: EncryptedBlob =
         serde_json::from_str(blob_json).map_err(|_| js_error(CryptoError::InvalidInput))?;
     let plaintext = decrypt_signal_state(device_private_key, &blob).map_err(js_error)?;
+    Ok(URL_SAFE_NO_PAD.encode(&*plaintext))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn wasm_encrypt_mls_state(
+    device_private_key: &str,
+    plaintext_base64: &str,
+) -> Result<String, JsValue> {
+    let plaintext = URL_SAFE_NO_PAD
+        .decode(plaintext_base64)
+        .map_err(|_| js_error(CryptoError::InvalidInput))?;
+    let blob = encrypt_mls_state(device_private_key, &plaintext).map_err(js_error)?;
+    serde_json::to_string(&blob).map_err(|_| js_error(CryptoError::InvalidInput))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn wasm_decrypt_mls_state(
+    device_private_key: &str,
+    blob_json: &str,
+) -> Result<String, JsValue> {
+    let blob: EncryptedBlob =
+        serde_json::from_str(blob_json).map_err(|_| js_error(CryptoError::InvalidInput))?;
+    let plaintext = decrypt_mls_state(device_private_key, &blob).map_err(js_error)?;
     Ok(URL_SAFE_NO_PAD.encode(&*plaintext))
 }
 
@@ -674,6 +846,17 @@ mod tests {
             b"ratchet state"
         );
         assert!(decrypt_signal_state(&second.private_key, &blob).is_err());
+        assert!(
+            decrypt_mls_state(&first.private_key, &blob).is_err(),
+            "Signal and MLS state domains must not be interchangeable"
+        );
+
+        let mls_blob = encrypt_mls_state(&first.private_key, b"MLS state").unwrap();
+        assert_eq!(
+            &*decrypt_mls_state(&first.private_key, &mls_blob).unwrap(),
+            b"MLS state"
+        );
+        assert!(decrypt_signal_state(&first.private_key, &mls_blob).is_err());
     }
 
     #[test]

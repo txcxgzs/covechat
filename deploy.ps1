@@ -17,21 +17,32 @@ docker compose version | Out-Null
 
 function New-RandomSecret {
     $bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return [Convert]::ToBase64String($bytes).Replace("+", "-").Replace("/", "_").TrimEnd("=")
+    $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $generator.GetBytes($bytes)
+        return [Convert]::ToBase64String($bytes).Replace("+", "-").Replace("/", "_").TrimEnd("=")
+    }
+    finally {
+        $generator.Dispose()
+    }
 }
 
 $envPath = Join-Path $root ".env"
 if (-not (Test-Path -LiteralPath $envPath)) {
     $postgresSecret = New-RandomSecret
     $minioSecret = New-RandomSecret
-    @"
+    $contents = @"
 COVECHAT_HTTP_HOST=$HostAddress
 COVECHAT_HTTP_PORT=$Port
 POSTGRES_PASSWORD=$postgresSecret
 MINIO_ROOT_USER=covechat
 MINIO_ROOT_PASSWORD=$minioSecret
-"@ | Set-Content -LiteralPath $envPath -Encoding utf8NoBOM
+"@
+    [System.IO.File]::WriteAllText(
+        $envPath,
+        $contents,
+        (New-Object System.Text.UTF8Encoding($false))
+    )
     Write-Host "Created .env with random infrastructure passwords." -ForegroundColor Green
 }
 
