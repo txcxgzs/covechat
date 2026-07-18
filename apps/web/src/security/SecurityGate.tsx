@@ -6,6 +6,7 @@ import {
   hasLocalVault,
   rotateRecoveredDevice,
   saveSecureProfile,
+  saveTrustState,
   unlockSecureProfile,
   type SecureProfile,
 } from "./vault";
@@ -95,11 +96,12 @@ export function SecurityGate({ children }: {
       const normalized = username.trim().toLowerCase();
       const recoverySession = await authenticateRecovery(normalized, recoverySecret.trim());
       const recoveryBackup = await loadBackupForRecovery(recoverySession);
-      const restored = await decryptBackup(
+      const restoredBackup = await decryptBackup(
         recoveryBackup.backup,
         recoverySecret.trim(),
         recoveryBackup.account.signingPublicKey,
       );
+      const restored = restoredBackup.profile;
       if (
         restored.username !== normalized
         || restored.accountKeys.publicKey !== recoveryBackup.account.signingPublicKey
@@ -115,6 +117,7 @@ export function SecurityGate({ children }: {
         signalPublished: true,
       };
       await saveSecureProfile(activeProfile, passphrase);
+      await saveTrustState(activeProfile, restoredBackup.trustState);
       await uploadBackup(
         await createEncryptedBackup(activeProfile, recoveryBackup.backup),
         session,

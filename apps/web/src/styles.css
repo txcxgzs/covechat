@@ -127,6 +127,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .device-row strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .device-row small { color: var(--muted); font-size: 10px; }
 .device-row .icon-button { color: #a63d40; flex: 0 0 auto; }
+.security-actions { display: grid; gap: 8px; }
+.verify.danger { color: #9c2f35; border-color: #e2b7ba; }
 .safety-number { display: block; background: transparent; color: #173047; letter-spacing: .06em; line-height: 2; font-size: 12px; }
 .verify { width: 100%; border: 0; border-radius: 6px; background: var(--teal); color: white; padding: 11px; font-weight: 700; margin-top: 11px; }
 .verify.verified { background: #e4f3ec; color: #24724d; display: flex; justify-content: center; gap: 7px; }

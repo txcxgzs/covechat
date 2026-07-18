@@ -11,6 +11,8 @@ export function wasm_decrypt_mls_state(device_private_key: string, blob_json: st
 
 export function wasm_decrypt_signal_state(device_private_key: string, blob_json: string): string;
 
+export function wasm_decrypt_trust_state(device_private_key: string, blob_json: string): string;
+
 export function wasm_derive_recovery_signing_keypair(recovery_secret: string, account_context_base64: string): string;
 
 export function wasm_encrypt_attachment_chunk(attachment_key: string, object_id_base64: string, chunk_index: number, plaintext_base64: string): string;
@@ -20,6 +22,8 @@ export function wasm_encrypt_backup(recovery_secret: string, account_id_base64: 
 export function wasm_encrypt_mls_state(device_private_key: string, plaintext_base64: string): string;
 
 export function wasm_encrypt_signal_state(device_private_key: string, plaintext_base64: string): string;
+
+export function wasm_encrypt_trust_state(device_private_key: string, plaintext_base64: string): string;
 
 export function wasm_generate_attachment_key(): string;
 
@@ -66,11 +70,13 @@ export interface InitOutput {
     readonly wasm_decrypt_backup: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly wasm_decrypt_mls_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wasm_decrypt_signal_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly wasm_decrypt_trust_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wasm_derive_recovery_signing_keypair: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wasm_encrypt_attachment_chunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly wasm_encrypt_backup: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly wasm_encrypt_mls_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wasm_encrypt_signal_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly wasm_encrypt_trust_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wasm_generate_attachment_key: () => [number, number, number, number];
     readonly wasm_generate_recovery_secret: () => [number, number, number, number];
     readonly wasm_generate_signing_keypair: () => [number, number, number, number];

@@ -47,6 +47,8 @@ const SIGNAL_STATE_INFO: &[u8] = b"covechat/v1/signal-state-key";
 const SIGNAL_STATE_AAD: &[u8] = b"covechat/v1/signal-state";
 const MLS_STATE_INFO: &[u8] = b"covechat/v1/mls-state-key";
 const MLS_STATE_AAD: &[u8] = b"covechat/v1/mls-state";
+const TRUST_STATE_INFO: &[u8] = b"covechat/v1/trust-state-key";
+const TRUST_STATE_AAD: &[u8] = b"covechat/v1/trust-state";
 const VAULT_AAD: &[u8] = b"covechat/v1/local-vault";
 
 #[derive(Debug, Error)]
@@ -324,6 +326,22 @@ pub fn decrypt_signal_state(
 ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     let key = derive_device_state_key(device_private_key, SIGNAL_STATE_INFO)?;
     decrypt_blob(&key, blob, SIGNAL_STATE_AAD)
+}
+
+pub fn encrypt_trust_state(
+    device_private_key: &str,
+    plaintext: &[u8],
+) -> Result<EncryptedBlob, CryptoError> {
+    let key = derive_device_state_key(device_private_key, TRUST_STATE_INFO)?;
+    encrypt_blob(&key, plaintext, TRUST_STATE_AAD)
+}
+
+pub fn decrypt_trust_state(
+    device_private_key: &str,
+    blob: &EncryptedBlob,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+    let key = derive_device_state_key(device_private_key, TRUST_STATE_INFO)?;
+    decrypt_blob(&key, blob, TRUST_STATE_AAD)
 }
 
 pub fn encrypt_mls_state(
@@ -635,6 +653,31 @@ pub fn wasm_decrypt_signal_state(
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
+pub fn wasm_encrypt_trust_state(
+    device_private_key: &str,
+    plaintext_base64: &str,
+) -> Result<String, JsValue> {
+    let plaintext = URL_SAFE_NO_PAD
+        .decode(plaintext_base64)
+        .map_err(|_| js_error(CryptoError::InvalidInput))?;
+    let blob = encrypt_trust_state(device_private_key, &plaintext).map_err(js_error)?;
+    serde_json::to_string(&blob).map_err(|_| js_error(CryptoError::InvalidInput))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn wasm_decrypt_trust_state(
+    device_private_key: &str,
+    blob_json: &str,
+) -> Result<String, JsValue> {
+    let blob: EncryptedBlob =
+        serde_json::from_str(blob_json).map_err(|_| js_error(CryptoError::InvalidInput))?;
+    let plaintext = decrypt_trust_state(device_private_key, &blob).map_err(js_error)?;
+    Ok(URL_SAFE_NO_PAD.encode(&*plaintext))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 pub fn wasm_encrypt_mls_state(
     device_private_key: &str,
     plaintext_base64: &str,
@@ -857,6 +900,14 @@ mod tests {
             b"MLS state"
         );
         assert!(decrypt_signal_state(&first.private_key, &mls_blob).is_err());
+
+        let trust_blob = encrypt_trust_state(&first.private_key, b"trust state").unwrap();
+        assert_eq!(
+            &*decrypt_trust_state(&first.private_key, &trust_blob).unwrap(),
+            b"trust state"
+        );
+        assert!(decrypt_signal_state(&first.private_key, &trust_blob).is_err());
+        assert!(decrypt_mls_state(&first.private_key, &trust_blob).is_err());
     }
 
     #[test]

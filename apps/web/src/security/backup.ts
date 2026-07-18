@@ -3,7 +3,13 @@ import initCrypto, {
   wasm_encrypt_backup,
 } from "../crypto-wasm/covechat_crypto";
 import type { EncryptedBackup } from "@covechat/protocol";
-import type { SecureProfile } from "./vault";
+import {
+  loadTrustState,
+  type SecureProfile,
+  type TrustState,
+} from "./vault";
+import { loadLatestBackup, uploadBackup } from "./api";
+import type { AuthSession } from "@covechat/protocol";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -37,7 +43,12 @@ export async function createEncryptedBackup(
   previous?: EncryptedBackup,
 ): Promise<EncryptedBackup> {
   await ensureCrypto();
-  const plaintext = toBase64Url(encoder.encode(JSON.stringify(profile)));
+  const payload = {
+    version: 2,
+    profile,
+    trustState: await loadTrustState(profile),
+  };
+  const plaintext = toBase64Url(encoder.encode(JSON.stringify(payload)));
   const ciphertext = wasm_encrypt_backup(
     profile.recoverySecret,
     profile.accountKeys.publicKey,
@@ -53,11 +64,16 @@ export async function createEncryptedBackup(
   };
 }
 
+export type RestoredBackup = {
+  profile: SecureProfile;
+  trustState: TrustState;
+};
+
 export async function decryptBackup(
   backup: EncryptedBackup,
   recoverySecret: string,
   accountPublicKey: string,
-): Promise<SecureProfile> {
+): Promise<RestoredBackup> {
   if (await digest(backup.ciphertext) !== backup.ciphertextDigest) {
     throw new Error("backup digest mismatch");
   }
@@ -67,11 +83,28 @@ export async function decryptBackup(
     accountPublicKey,
     backup.ciphertext,
   );
-  const profile = JSON.parse(
+  const decoded = JSON.parse(
     decoder.decode(fromBase64Url(plaintext)),
-  ) as SecureProfile;
+  ) as SecureProfile | { version: 2; profile: SecureProfile; trustState: TrustState };
+  const profile = decoded.version === 2 && "profile" in decoded ? decoded.profile : decoded;
+  const trustState = decoded.version === 2 && "trustState" in decoded
+    ? decoded.trustState
+    : { version: 1 as const, identities: {} };
   if (profile.version !== 1 || profile.recoverySecret !== recoverySecret) {
     throw new Error("invalid backup");
   }
-  return profile;
+  return { profile, trustState };
+}
+
+let pendingSync: Promise<void> = Promise.resolve();
+
+export function syncEncryptedBackup(
+  profile: SecureProfile,
+  session: AuthSession,
+): Promise<void> {
+  pendingSync = pendingSync.catch(() => undefined).then(async () => {
+    const previous = await loadLatestBackup(session);
+    await uploadBackup(await createEncryptedBackup(profile, previous ?? undefined), session);
+  });
+  return pendingSync;
 }

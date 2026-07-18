@@ -9,7 +9,20 @@ import { copy, detectLocale, type Locale, type Translate } from "./i18n";
 import { SecurityGate } from "./security/SecurityGate";
 import type { SecureProfile } from "./security/vault";
 import type { AttachmentReference, AuthSession, DeviceRecord } from "@covechat/protocol";
-import { listOwnDevices, revokeOwnDevice } from "./security/api";
+import {
+  listBlockedUsers,
+  listOwnDevices,
+  lookupDirectory,
+  revokeOwnDevice,
+  setUserBlocked,
+  submitAbuseReport,
+} from "./security/api";
+import { identityVerification, markIdentityVerified } from "./security/trust";
+import {
+  appendConversationHistory,
+  loadConversationHistory,
+} from "./security/history";
+import { syncEncryptedBackup } from "./security/backup";
 import {
   downloadAndDecryptAttachment,
   encryptAndUploadAttachment,
@@ -23,6 +36,7 @@ import {
 } from "./security/groups";
 import {
   receiveEncryptedTexts,
+  sendEncryptedAttachment,
   sendEncryptedText,
   subscribeEncryptedMailbox,
 } from "./security/signal";
@@ -181,36 +195,80 @@ function Composer({ onSend, onAttachment, t }: {
   );
 }
 
-function Chat({ locale, onDetails, profile, session, t }: {
+function Chat({ locale, onDetails, onReceivedText, onRecipientChange, profile, recipient, session, t }: {
   locale: Locale;
   onDetails: () => void;
   profile: SecureProfile;
   session: AuthSession;
   t: Translate;
+  recipient: string;
+  onRecipientChange: (recipient: string) => void;
+  onReceivedText: (text: string) => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [recipient, setRecipient] = useState("");
   const [attachments, setAttachments] = useState<AttachmentReference[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState("");
+  useEffect(() => {
+    if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
+      setMessages([]);
+      setAttachments([]);
+      return;
+    }
+    void loadConversationHistory(profile, recipient).then((history) => {
+      setMessages(history.filter((item) => item.body).map((item) => ({
+        id: item.id,
+        from: item.from,
+        text: item.body!,
+        time: new Intl.DateTimeFormat(locale, {
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(new Date(item.createdAt)),
+        delivered: true,
+      })));
+      setAttachments(history.flatMap((item) => item.attachment ? [item.attachment] : []));
+    });
+  }, [locale, profile, recipient]);
   useEffect(() => {
     let active = true;
     async function refresh() {
       const received = await receiveEncryptedTexts(profile, session);
       if (!active || received.length === 0) return;
+      for (const message of received) {
+        await appendConversationHistory(profile, message.senderUsername, {
+          id: message.envelopeId,
+          from: "them",
+          body: message.body,
+          attachment: message.attachment,
+          createdAt: message.createdAt,
+        });
+      }
+      void syncEncryptedBackup(profile, session).catch(() => undefined);
+      const visible = received.filter((message) => message.senderUsername === recipient);
       setMessages((current) => {
         const known = new Set(current.map((message) => message.id));
         return [
           ...current,
-          ...received.filter((message) => !known.has(message.envelopeId)).map((message) => ({
+          ...visible.filter((message) => message.body && !known.has(message.envelopeId)).map((message) => ({
             id: message.envelopeId,
             from: "them" as const,
-            text: message.body,
+            text: message.body!,
             time: new Intl.DateTimeFormat(locale, {
               hour: "2-digit",
               minute: "2-digit",
             }).format(new Date(message.createdAt)),
             delivered: true,
           })),
+        ];
+      });
+      const lastText = [...visible].reverse().find((message) => message.body)?.body;
+      if (lastText) onReceivedText(lastText);
+      setAttachments((current) => {
+        const known = new Set(current.map((attachment) => attachment.objectId));
+        return [
+          ...current,
+          ...visible
+            .flatMap((message) => message.attachment ? [message.attachment] : [])
+            .filter((attachment) => !known.has(attachment.objectId)),
         ];
       });
     }
@@ -220,7 +278,7 @@ function Chat({ locale, onDetails, profile, session, t }: {
       active = false;
       unsubscribe();
     };
-  }, [locale, profile, session]);
+  }, [locale, profile, recipient, session]);
 
   async function sendText(text: string) {
     if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
@@ -229,14 +287,23 @@ function Chat({ locale, onDetails, profile, session, t }: {
     }
     try {
       await sendEncryptedText(profile, session, recipient, text);
+      const id = crypto.randomUUID();
+      const createdAt = Date.now();
+      await appendConversationHistory(profile, recipient, {
+        id,
+        from: "me",
+        body: text,
+        createdAt,
+      });
+      void syncEncryptedBackup(profile, session).catch(() => undefined);
       setMessages((current) => [...current, {
-        id: crypto.randomUUID(),
+        id,
         from: "me",
         text,
         time: new Intl.DateTimeFormat(locale, {
           hour: "2-digit",
           minute: "2-digit",
-        }).format(new Date()),
+        }).format(new Date(createdAt)),
         delivered: true,
       }]);
       setAttachmentStatus("");
@@ -247,9 +314,21 @@ function Chat({ locale, onDetails, profile, session, t }: {
     }
   }
   async function uploadAttachment(file: File) {
+    if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
+      setAttachmentStatus(t("vaultError"));
+      return;
+    }
     setAttachmentStatus(t("attachmentUploading"));
     try {
       const reference = await encryptAndUploadAttachment(file, session);
+      await sendEncryptedAttachment(profile, session, recipient, reference);
+      await appendConversationHistory(profile, recipient, {
+        id: crypto.randomUUID(),
+        from: "me",
+        attachment: reference,
+        createdAt: Date.now(),
+      });
+      void syncEncryptedBackup(profile, session).catch(() => undefined);
       setAttachments((current) => [...current, reference]);
       setAttachmentStatus("");
     } catch {
@@ -273,7 +352,7 @@ function Chat({ locale, onDetails, profile, session, t }: {
     <main className="chat">
       <ChatHeader
         onDetails={onDetails}
-        onRecipientChange={setRecipient}
+        onRecipientChange={onRecipientChange}
         recipient={recipient}
         t={t}
       />
@@ -367,7 +446,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
   async function createGroup(event: FormEvent) {
     event.preventDefault();
     try {
-      const created = await createEncryptedGroup(profile, groupName);
+      const created = await createEncryptedGroup(profile, session, groupName);
       refreshGroups();
       setSelectedGroupId(created.groupId);
       setGroupName("");
@@ -493,16 +572,21 @@ function GroupWorkspace({ locale, profile, session, t }: {
   );
 }
 
-function SecurityPanel({ open, onClose, locale, profile, session, t }: {
+function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recipient, session, t }: {
+  lastReceivedText?: string;
   open: boolean;
   onClose: () => void;
   locale: Locale;
   profile: SecureProfile;
+  recipient: string;
   session: AuthSession;
   t: Translate;
 }) {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [deviceError, setDeviceError] = useState("");
+  const [verification, setVerification] = useState<{ safetyNumber: string; verified: boolean }>();
+  const [blocked, setBlocked] = useState(false);
+  const [actionStatus, setActionStatus] = useState("");
   const zh = locale === "zh-CN";
   const refreshDevices = async () => {
     try {
@@ -513,8 +597,18 @@ function SecurityPanel({ open, onClose, locale, profile, session, t }: {
     }
   };
   useEffect(() => {
-    if (open) void refreshDevices();
-  }, [open, session.accessToken]);
+    if (!open) return;
+    void refreshDevices();
+    void listBlockedUsers(session).then((users) => setBlocked(users.includes(recipient)));
+    if (/^[a-z0-9_]{3,32}$/u.test(recipient)) {
+      void lookupDirectory(recipient, session)
+        .then((directory) => identityVerification(profile, directory))
+        .then(setVerification)
+        .catch(() => setVerification(undefined));
+    } else {
+      setVerification(undefined);
+    }
+  }, [open, recipient, session.accessToken]);
   const revoke = async (deviceId: string) => {
     if (!window.confirm(zh ? "确认撤销这台设备？撤销后它将无法登录或接收新消息。" : "Revoke this device? It will no longer sign in or receive new messages.")) return;
     try {
@@ -522,6 +616,24 @@ function SecurityPanel({ open, onClose, locale, profile, session, t }: {
       await refreshDevices();
     } catch {
       setDeviceError(zh ? "设备撤销失败" : "Device revocation failed");
+    }
+  };
+  const toggleBlocked = async () => {
+    try {
+      await setUserBlocked(recipient, !blocked, session);
+      setBlocked(!blocked);
+      setActionStatus(zh ? (!blocked ? "已拉黑该用户" : "已解除拉黑") : (!blocked ? "User blocked" : "User unblocked"));
+    } catch {
+      setActionStatus(zh ? "拉黑设置失败" : "Block setting failed");
+    }
+  };
+  const report = async () => {
+    if (!lastReceivedText || !window.confirm(zh ? "这会把所选消息明文主动提交给服务端审核。确认举报？" : "This explicitly discloses the selected message to moderators. Submit report?")) return;
+    try {
+      await submitAbuseReport(profile, session, recipient, JSON.stringify({ message: lastReceivedText }), "user-selected latest received message");
+      setActionStatus(zh ? "举报已提交" : "Report submitted");
+    } catch {
+      setActionStatus(zh ? "举报提交失败" : "Report submission failed");
     }
   };
   return (
@@ -535,6 +647,24 @@ function SecurityPanel({ open, onClose, locale, profile, session, t }: {
       <section className="security-section">
         <h3><ShieldCheck />{t("securityOverview")}</h3>
         <p>{t("securityOverviewBody")}</p>
+      </section>
+      <section className="security-section">
+        <h3><ShieldCheck />{t("verifySafetyNumber")}</h3>
+        {verification ? (
+          <>
+            <p>{t("verifySafetyNumberBody")}</p>
+            <code className="safety-number">{verification.safetyNumber}</code>
+            <button
+              className={verification.verified ? "verify verified" : "verify"}
+              disabled={verification.verified}
+              onClick={() => void lookupDirectory(recipient, session)
+                .then((directory) => markIdentityVerified(profile, directory))
+                .then(() => setVerification((current) => current ? { ...current, verified: true } : current))}
+            >
+              {verification.verified ? <><CheckCheck /> {t("safetyNumberVerified")}</> : t("verifySafetyNumber")}
+            </button>
+          </>
+        ) : <p>{t("unavailablePreview")}</p>}
       </section>
       <section className="security-section">
         <h3><ShieldCheck />{zh ? "我的设备" : "My devices"}</h3>
@@ -553,6 +683,16 @@ function SecurityPanel({ open, onClose, locale, profile, session, t }: {
         ))}
         {deviceError ? <p className="fail-closed">{deviceError}</p> : null}
       </section>
+      {/^[a-z0-9_]{3,32}$/u.test(recipient) ? (
+        <section className="security-section">
+          <h3><ShieldCheck />{zh ? "隐私与安全操作" : "Privacy and safety actions"}</h3>
+          <div className="security-actions">
+            <button className="verify" onClick={() => void toggleBlocked()}>{blocked ? (zh ? "解除拉黑" : "Unblock") : (zh ? "拉黑用户" : "Block user")}</button>
+            <button className="verify danger" disabled={!lastReceivedText} onClick={() => void report()}>{zh ? "举报最近收到的消息" : "Report latest received message"}</button>
+          </div>
+          {actionStatus ? <p role="status">{actionStatus}</p> : null}
+        </section>
+      ) : null}
       <section className="security-section details">
         <h3><LockKeyhole />{t("encryptionDetails")}</h3>
         <dl><dt>{t("protocol")}</dt><dd>Signal PQXDH + Triple Ratchet / RFC 9420 MLS</dd><dt>{t("identityKey")}</dt><dd>{profile.accountKeys.publicKey.slice(0, 24)}…</dd></dl>
@@ -570,6 +710,8 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   );
   const [noticeOpen, setNoticeOpen] = useState(true);
   const [activeView, setActiveView] = useState<"messages" | "groups">("messages");
+  const [recipient, setRecipient] = useState("");
+  const [lastReceivedText, setLastReceivedText] = useState<string>();
   useEffect(() => {
     localStorage.setItem("covechat.locale", locale);
     document.documentElement.lang = locale;
@@ -595,11 +737,14 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
               key={`chat-${locale}`}
               locale={locale}
               profile={profile}
+              recipient={recipient}
               session={session}
+              onRecipientChange={setRecipient}
+              onReceivedText={setLastReceivedText}
               onDetails={() => setDetailsOpen(true)}
               t={t}
             />
-            <SecurityPanel open={detailsOpen} onClose={() => setDetailsOpen(false)} locale={locale} profile={profile} session={session} t={t} />
+            <SecurityPanel lastReceivedText={lastReceivedText} open={detailsOpen} onClose={() => setDetailsOpen(false)} locale={locale} profile={profile} recipient={recipient} session={session} t={t} />
           </>
         ) : (
           <GroupWorkspace locale={locale} profile={profile} session={session} t={t} />

@@ -2,11 +2,13 @@ import initCrypto, {
   wasm_create_local_vault,
   wasm_decrypt_mls_state,
   wasm_decrypt_signal_state,
+  wasm_decrypt_trust_state,
   wasm_derive_recovery_signing_keypair,
   wasm_generate_recovery_secret,
   wasm_generate_signing_keypair,
   wasm_open_local_vault,
   wasm_encrypt_signal_state,
+  wasm_encrypt_trust_state,
   wasm_encrypt_mls_state,
   wasm_mls_create_device,
   wasm_signal_create_device,
@@ -18,6 +20,7 @@ const STORE = "vault";
 const VAULT_KEY = "primary";
 const SIGNAL_STATE_KEY = "signal-state";
 const MLS_STATE_KEY = "mls-state";
+const TRUST_STATE_KEY = "trust-state";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -104,6 +107,34 @@ type StoredMlsState = {
   updatedAt: number;
 };
 
+type StoredTrustState = {
+  id: typeof TRUST_STATE_KEY;
+  version: 1;
+  encryptedState: string;
+  updatedAt: number;
+};
+
+export type TrustedIdentity = {
+  accountSigningKey: string;
+  deviceFingerprints: Record<string, string>;
+  verifiedFingerprint?: string;
+  verifiedAt?: number;
+};
+
+export type TrustState = {
+  version: 1;
+  identities: Record<string, TrustedIdentity>;
+  history?: Record<string, LocalHistoryItem[]>;
+};
+
+export type LocalHistoryItem = {
+  id: string;
+  from: "me" | "them";
+  body?: string;
+  attachment?: import("@covechat/protocol").AttachmentReference;
+  createdAt: number;
+};
+
 let cryptoReady: Promise<unknown> | undefined;
 
 function ensureCrypto() {
@@ -158,7 +189,7 @@ export async function hasLocalVault(): Promise<boolean> {
 }
 
 export async function deleteLocalVault(): Promise<void> {
-  await transaction<undefined>("readwrite", (store) => store.delete(VAULT_KEY));
+  await transaction<undefined>("readwrite", (store) => store.clear());
 }
 
 export async function createSecureProfile(
@@ -250,6 +281,40 @@ export async function saveMlsState(profile: SecureProfile): Promise<void> {
     encryptedState,
     updatedAt: Date.now(),
   } satisfies StoredMlsState));
+}
+
+export async function loadTrustState(profile: SecureProfile): Promise<TrustState> {
+  await ensureCrypto();
+  const record = await transaction<StoredTrustState | undefined>(
+    "readonly",
+    (store) => store.get(TRUST_STATE_KEY),
+  );
+  if (!record || record.version !== 1) return { version: 1, identities: {} };
+  const plaintext = wasm_decrypt_trust_state(
+    profile.deviceKeys.privateKey,
+    record.encryptedState,
+  );
+  const state = JSON.parse(decoder.decode(fromBase64Url(plaintext))) as TrustState;
+  if (state.version !== 1 || !state.identities) throw new Error("invalid trust state");
+  return state;
+}
+
+export async function saveTrustState(
+  profile: SecureProfile,
+  state: TrustState,
+): Promise<void> {
+  await ensureCrypto();
+  const plaintext = toBase64Url(encoder.encode(JSON.stringify(state)));
+  const encryptedState = wasm_encrypt_trust_state(
+    profile.deviceKeys.privateKey,
+    plaintext,
+  );
+  await transaction<IDBValidKey>("readwrite", (store) => store.put({
+    id: TRUST_STATE_KEY,
+    version: 1,
+    encryptedState,
+    updatedAt: Date.now(),
+  } satisfies StoredTrustState));
 }
 
 async function restoreSignalState(profile: SecureProfile): Promise<void> {

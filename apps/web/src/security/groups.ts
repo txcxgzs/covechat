@@ -24,6 +24,7 @@ import {
   type PublishedPreKeyBundle,
   type SecureProfile,
 } from "./vault";
+import { syncEncryptedBackup } from "./backup";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -171,6 +172,7 @@ async function deliver(
 
 export async function createEncryptedGroup(
   profile: SecureProfile,
+  session: AuthSession,
   name: string,
 ): Promise<MlsGroupMetadata> {
   await ensureCrypto();
@@ -182,6 +184,7 @@ export async function createEncryptedGroup(
   profile.mls.state = result.state;
   const metadata = updateMetadata(profile, result, name, conversationId);
   await saveMlsState(profile);
+  void syncEncryptedBackup(profile, session).catch(() => undefined);
   return metadata;
 }
 
@@ -213,6 +216,7 @@ export async function addGroupMember(
     updateMetadata(profile, result);
     // Persist the epoch transition before any commit or Welcome leaves the device.
     await saveMlsState(profile);
+    void syncEncryptedBackup(profile, session).catch(() => undefined);
     await deliver(profile, session, metadata, previousMembers, {
       protocol: "mls-rfc9420",
       kind: "commit",
@@ -249,6 +253,7 @@ export async function removeGroupMember(
   profile.mls.state = result.state;
   updateMetadata(profile, result);
   await saveMlsState(profile);
+  void syncEncryptedBackup(profile, session).catch(() => undefined);
   await deliver(profile, session, metadata, previousMembers, {
     protocol: "mls-rfc9420",
     kind: "commit",
@@ -282,6 +287,7 @@ export async function sendEncryptedGroupText(
   profile.mls.state = result.state;
   metadata.epoch = result.epoch;
   await saveMlsState(profile);
+  void syncEncryptedBackup(profile, session).catch(() => undefined);
   await deliver(profile, session, metadata, metadata.memberDeviceIds, {
     protocol: "mls-rfc9420",
     kind: "application",
@@ -315,6 +321,7 @@ export async function receiveEncryptedGroupMessages(
         profile.mls.state = refreshed.state;
         profile.mls.keyPackage = refreshed.keyPackage;
         await saveMlsState(profile);
+        void syncEncryptedBackup(profile, session).catch(() => undefined);
         await publishSignalPreKeys(profile, session);
         await acknowledgeEnvelope(envelope.envelopeId, session);
         continue;
@@ -327,6 +334,7 @@ export async function receiveEncryptedGroupMessages(
       profile.mls.state = processed.state;
       updateMetadata(profile, processed);
       await saveMlsState(profile);
+      void syncEncryptedBackup(profile, session).catch(() => undefined);
       await acknowledgeEnvelope(envelope.envelopeId, session);
       if (processed.kind !== "application" || !processed.plaintext) continue;
       const payload = JSON.parse(

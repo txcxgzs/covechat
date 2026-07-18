@@ -177,6 +177,66 @@ export async function revokeOwnDevice(
   if (!response.ok) throw new Error(`device revocation failed: ${response.status}`);
 }
 
+export async function listBlockedUsers(session: AuthSession): Promise<string[]> {
+  const response = await fetch("/api/v1/blocks", {
+    headers: authenticatedHeaders(session),
+  });
+  if (!response.ok) throw new Error(`block list failed: ${response.status}`);
+  return response.json() as Promise<string[]>;
+}
+
+export async function setUserBlocked(
+  username: string,
+  blocked: boolean,
+  session: AuthSession,
+): Promise<void> {
+  const response = await fetch(`/api/v1/blocks/${encodeURIComponent(username)}`, {
+    method: blocked ? "POST" : "DELETE",
+    headers: authenticatedHeaders(session),
+  });
+  if (!response.ok) throw new Error(`block update failed: ${response.status}`);
+}
+
+export async function submitAbuseReport(
+  profile: SecureProfile,
+  session: AuthSession,
+  reportedUsername: string,
+  disclosedMessageBundle: string,
+  context: string,
+): Promise<void> {
+  const protocolVersion = 1;
+  const reportId = crypto.randomUUID();
+  const createdAt = Math.floor(Date.now() / 1000);
+  const reporterSignature = await signWithDevice(
+    profile,
+    encoder.encode(JSON.stringify([
+      protocolVersion,
+      reportId,
+      reportedUsername,
+      disclosedMessageBundle,
+      context,
+      createdAt,
+    ])),
+  );
+  const response = await fetch("/api/v1/reports", {
+    method: "POST",
+    headers: {
+      ...authenticatedHeaders(session),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      protocolVersion,
+      reportId,
+      reportedUsername,
+      disclosedMessageBundle,
+      context,
+      createdAt,
+      reporterSignature,
+    }),
+  });
+  if (!response.ok) throw new Error(`report submission failed: ${response.status}`);
+}
+
 export async function readMailbox(
   session: AuthSession,
 ): Promise<EncryptedEnvelope[]> {

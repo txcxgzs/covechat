@@ -5,7 +5,7 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use super::{
-    AccountIdentity, AttachmentChunk, AttachmentObject, DeviceRecord, EncryptedBackup,
+    AbuseReport, AccountIdentity, AttachmentChunk, AttachmentObject, DeviceRecord, EncryptedBackup,
     EncryptedEnvelope, Store,
 };
 
@@ -134,6 +134,22 @@ impl Persistence {
                     },
                 );
             }
+        }
+        for row in sqlx::query("SELECT payload FROM abuse_reports")
+            .fetch_all(&self.pool)
+            .await?
+        {
+            let report: AbuseReport = serde_json::from_value(row.try_get("payload")?)?;
+            store.abuse_reports.insert(report.report_id, report);
+        }
+        for row in sqlx::query("SELECT blocker_username, blocked_username FROM user_blocks")
+            .fetch_all(&self.pool)
+            .await?
+        {
+            store.blocks.insert((
+                row.try_get("blocker_username")?,
+                row.try_get("blocked_username")?,
+            ));
         }
         Ok(store)
     }
@@ -287,6 +303,49 @@ impl Persistence {
         .bind(serde_json::to_value(backup)?)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    pub async fn insert_abuse_report(&self, report: &AbuseReport) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO abuse_reports
+             (report_id, reporter_device_id, reported_username, payload)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(report.report_id)
+        .bind(report.reporter_device_id)
+        .bind(&report.reported_username)
+        .bind(serde_json::to_value(report)?)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_user_block(
+        &self,
+        blocker_username: &str,
+        blocked_username: &str,
+        blocked: bool,
+    ) -> anyhow::Result<()> {
+        if blocked {
+            sqlx::query(
+                "INSERT INTO user_blocks (blocker_username, blocked_username)
+                 VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
+            .bind(blocker_username)
+            .bind(blocked_username)
+            .execute(&self.pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "DELETE FROM user_blocks
+                 WHERE blocker_username = $1 AND blocked_username = $2",
+            )
+            .bind(blocker_username)
+            .bind(blocked_username)
+            .execute(&self.pool)
+            .await?;
+        }
         Ok(())
     }
 

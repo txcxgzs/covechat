@@ -2,6 +2,7 @@
 
 mod object_store;
 mod persistence;
+mod rate_limit;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -25,6 +26,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use object_store::ObjectStore;
 use persistence::Persistence;
+use rate_limit::RateLimiter;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, broadcast};
@@ -43,6 +45,7 @@ struct AppState {
     events: broadcast::Sender<String>,
     persistence: Option<Persistence>,
     object_store: Option<ObjectStore>,
+    rate_limiter: Option<RateLimiter>,
 }
 
 #[derive(Default)]
@@ -58,6 +61,8 @@ struct Store {
     last_sequence: HashMap<(Uuid, Uuid), u64>,
     backups: HashMap<String, EncryptedBackup>,
     attachments: HashMap<Uuid, AttachmentObject>,
+    abuse_reports: HashMap<Uuid, AbuseReport>,
+    blocks: HashSet<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +224,32 @@ struct AttachmentChunk {
     ciphertext_size: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AbuseReport {
+    protocol_version: u8,
+    report_id: Uuid,
+    reporter_device_id: Uuid,
+    reported_username: String,
+    disclosed_message_bundle: String,
+    context: String,
+    created_at: u64,
+    reporter_signature: String,
+    status: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateAbuseReport {
+    protocol_version: u8,
+    report_id: Uuid,
+    reported_username: String,
+    disclosed_message_bundle: String,
+    context: String,
+    created_at: u64,
+    reporter_signature: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateAttachment {
@@ -288,12 +319,21 @@ async fn main() {
             "S3_ENDPOINT is unset; attachment ciphertext uses PostgreSQL development fallback"
         );
     }
+    let rate_limiter = RateLimiter::connect_from_env()
+        .await
+        .expect("initialize Redis rate limiter");
+    if rate_limiter.is_some() {
+        tracing::info!("Redis distributed rate limiting enabled");
+    } else {
+        tracing::warn!("REDIS_URL is unset; distributed rate limiting is disabled");
+    }
     let (events, _) = broadcast::channel(1024);
     let state = AppState {
         inner: Arc::new(Mutex::new(store)),
         events,
         persistence,
         object_store,
+        rate_limiter,
     };
     tokio::spawn(cleanup_loop(state.clone()));
     let app = router(state);
@@ -334,6 +374,12 @@ fn router(state: AppState) -> Router {
         .route("/v1/directory/{username}", get(read_directory))
         .route("/v1/backups/latest", get(read_latest_backup))
         .route("/v1/backups", put(store_backup))
+        .route("/v1/reports", post(create_abuse_report))
+        .route("/v1/blocks", get(list_blocks))
+        .route(
+            "/v1/blocks/{username}",
+            post(block_user).delete(unblock_user),
+        )
         .route("/v1/attachments", post(create_attachment))
         .route(
             "/v1/attachments/{object_id}",
@@ -365,6 +411,167 @@ async fn health() -> Json<serde_json::Value> {
         "securityStatus": "experimental-unaudited",
         "plaintextAccepted": false
     }))
+}
+
+async fn create_abuse_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateAbuseReport>,
+) -> StatusCode {
+    if input.protocol_version != PROTOCOL_VERSION
+        || !valid_username(&input.reported_username)
+        || input.disclosed_message_bundle.is_empty()
+        || input.disclosed_message_bundle.len() > 64 * 1024
+        || input.context.len() > 4 * 1024
+        || input.created_at > unix_now() + 300
+        || unix_now().saturating_sub(input.created_at) > 24 * 60 * 60
+    {
+        return StatusCode::BAD_REQUEST;
+    }
+    let reporter_device_id =
+        match authenticated_rate_limit(&state, &headers, "reports", 5, 60 * 60).await {
+            Ok(device_id) => device_id,
+            Err(status) => return status,
+        };
+    let mut store = state.inner.lock().await;
+    let Some(device) = store.devices.get(&reporter_device_id) else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    let Ok(payload) = serde_json::to_vec(&(
+        input.protocol_version,
+        input.report_id,
+        &input.reported_username,
+        &input.disclosed_message_bundle,
+        &input.context,
+        input.created_at,
+    )) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    if !verify_signature(
+        &device.signing_public_key,
+        &payload,
+        &input.reporter_signature,
+    ) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    if store.abuse_reports.contains_key(&input.report_id) {
+        return StatusCode::CONFLICT;
+    }
+    let report = AbuseReport {
+        protocol_version: input.protocol_version,
+        report_id: input.report_id,
+        reporter_device_id,
+        reported_username: input.reported_username,
+        disclosed_message_bundle: input.disclosed_message_bundle,
+        context: input.context,
+        created_at: input.created_at,
+        reporter_signature: input.reporter_signature,
+        status: "received".into(),
+    };
+    store.abuse_reports.insert(input.report_id, report.clone());
+    drop(store);
+    if let Some(database) = &state.persistence
+        && let Err(error) = database.insert_abuse_report(&report).await
+    {
+        state
+            .inner
+            .lock()
+            .await
+            .abuse_reports
+            .remove(&report.report_id);
+        tracing::error!(error = %error, "persist abuse report");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    StatusCode::CREATED
+}
+
+async fn list_blocks(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<Vec<String>>) {
+    let mut store = state.inner.lock().await;
+    let Some(device_id) = authenticated_device(&headers, &mut store) else {
+        return (StatusCode::UNAUTHORIZED, Json(Vec::new()));
+    };
+    let Some(username) = store
+        .devices
+        .get(&device_id)
+        .map(|device| device.username.clone())
+    else {
+        return (StatusCode::UNAUTHORIZED, Json(Vec::new()));
+    };
+    let mut blocked = store
+        .blocks
+        .iter()
+        .filter(|(blocker, _)| blocker == &username)
+        .map(|(_, blocked)| blocked.clone())
+        .collect::<Vec<_>>();
+    blocked.sort();
+    (StatusCode::OK, Json(blocked))
+}
+
+async fn block_user(
+    State(state): State<AppState>,
+    Path(blocked_username): Path<String>,
+    headers: HeaderMap,
+) -> StatusCode {
+    set_block(state, headers, blocked_username, true).await
+}
+
+async fn unblock_user(
+    State(state): State<AppState>,
+    Path(blocked_username): Path<String>,
+    headers: HeaderMap,
+) -> StatusCode {
+    set_block(state, headers, blocked_username, false).await
+}
+
+async fn set_block(
+    state: AppState,
+    headers: HeaderMap,
+    blocked_username: String,
+    blocked: bool,
+) -> StatusCode {
+    if !valid_username(&blocked_username) {
+        return StatusCode::BAD_REQUEST;
+    }
+    let mut store = state.inner.lock().await;
+    let Some(device_id) = authenticated_device(&headers, &mut store) else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    let Some(username) = store
+        .devices
+        .get(&device_id)
+        .map(|device| device.username.clone())
+    else {
+        return StatusCode::UNAUTHORIZED;
+    };
+    if username == blocked_username {
+        return StatusCode::BAD_REQUEST;
+    }
+    let pair = (username.clone(), blocked_username.clone());
+    let previously_blocked = store.blocks.contains(&pair);
+    if blocked {
+        store.blocks.insert(pair.clone());
+    } else {
+        store.blocks.remove(&pair);
+    }
+    drop(store);
+    if let Some(database) = &state.persistence
+        && let Err(error) = database
+            .set_user_block(&username, &blocked_username, blocked)
+            .await
+    {
+        let mut store = state.inner.lock().await;
+        if previously_blocked {
+            store.blocks.insert(pair);
+        } else {
+            store.blocks.remove(&pair);
+        }
+        tracing::error!(error = %error, "persist user block");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    StatusCode::NO_CONTENT
 }
 
 async fn onboard_account(
@@ -734,18 +941,32 @@ async fn store_envelope(
     {
         return StatusCode::BAD_REQUEST;
     }
-    let mut store = state.inner.lock().await;
-    if authenticated_device(&headers, &mut store) != Some(envelope.sender_device_id) {
+    let authenticated = match authenticated_rate_limit(&state, &headers, "envelopes", 120, 60).await
+    {
+        Ok(device_id) => device_id,
+        Err(status) => return status,
+    };
+    if authenticated != envelope.sender_device_id {
         return StatusCode::UNAUTHORIZED;
     }
+    let mut store = state.inner.lock().await;
     let Some(sender) = store.devices.get(&envelope.sender_device_id) else {
         return StatusCode::UNAUTHORIZED;
     };
     if sender.revoked_at.is_some() || !verify_envelope_signature(sender, &envelope) {
         return StatusCode::UNAUTHORIZED;
     }
-    if !store.devices.contains_key(&envelope.recipient_device_id) {
+    let Some(recipient_device) = store.devices.get(&envelope.recipient_device_id) else {
         return StatusCode::NOT_FOUND;
+    };
+    if recipient_device.revoked_at.is_some() {
+        return StatusCode::GONE;
+    }
+    if store
+        .blocks
+        .contains(&(recipient_device.username.clone(), sender.username.clone()))
+    {
+        return StatusCode::FORBIDDEN;
     }
     let sequence_key = (envelope.sender_device_id, envelope.conversation_id);
     if store
@@ -1448,6 +1669,33 @@ fn authenticated_device(headers: &HeaderMap, store: &mut Store) -> Option<Uuid> 
     authenticate_token(token, store)
 }
 
+async fn authenticated_rate_limit(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &str,
+    limit: u64,
+    window_seconds: u64,
+) -> Result<Uuid, StatusCode> {
+    let device_id = {
+        let mut store = state.inner.lock().await;
+        authenticated_device(headers, &mut store).ok_or(StatusCode::UNAUTHORIZED)?
+    };
+    if let Some(rate_limiter) = &state.rate_limiter {
+        match rate_limiter
+            .check(scope, &device_id.to_string(), limit, window_seconds)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => return Err(StatusCode::TOO_MANY_REQUESTS),
+            Err(error) => {
+                tracing::error!(error = %error, scope, "Redis rate limit failure");
+                return Err(StatusCode::SERVICE_UNAVAILABLE);
+            }
+        }
+    }
+    Ok(device_id)
+}
+
 fn authenticated_websocket_device(headers: &HeaderMap, store: &mut Store) -> Option<Uuid> {
     let mut values = headers
         .get("sec-websocket-protocol")?
@@ -1569,6 +1817,7 @@ mod tests {
             events,
             persistence: None,
             object_store: None,
+            rate_limiter: None,
         };
         let mut headers = HeaderMap::new();
         headers.insert(

@@ -1,4 +1,5 @@
 import type {
+  AttachmentReference,
   AuthSession,
   DirectoryResponse,
   EncryptedEnvelope,
@@ -22,6 +23,8 @@ import {
   type SecureProfile,
   type SignalPreKeyBundle,
 } from "./vault";
+import { observeAndCheckIdentity } from "./trust";
+import { syncEncryptedBackup } from "./backup";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -41,7 +44,9 @@ type SignalDecryptResult = {
 export type DecryptedTextMessage = {
   envelopeId: string;
   senderDeviceId: string;
-  body: string;
+  senderUsername: string;
+  body?: string;
+  attachment?: AttachmentReference;
   createdAt: number;
 };
 
@@ -87,22 +92,26 @@ function parseBundle(directory: DirectoryResponse["devices"][number]): SignalPre
   return bundle;
 }
 
-export async function sendEncryptedText(
+type SignalPayload =
+  | { version: 1; type: "text"; senderUsername: string; body: string; createdAt: number }
+  | { version: 1; type: "attachment"; senderUsername: string; attachment: AttachmentReference; createdAt: number };
+
+async function sendEncryptedPayload(
   profile: SecureProfile,
   session: AuthSession,
   recipientUsername: string,
-  body: string,
+  payload: SignalPayload,
 ): Promise<void> {
   await ensureCrypto();
   const normalized = recipientUsername.trim().toLowerCase();
-  if (!body.trim()) throw new Error("message must not be empty");
   const directory = await lookupDirectory(normalized, session);
+  await observeAndCheckIdentity(profile, directory);
   const activeDevices = directory.devices.filter(
     (device) => !device.revokedAt && device.prekeyBundle,
   );
   if (activeDevices.length === 0) throw new Error("recipient has no active Signal devices");
   const threadId = await conversationId(profile.username, normalized);
-  const createdAt = Date.now();
+  const createdAt = payload.createdAt;
 
   for (const [index, device] of activeDevices.entries()) {
     const bundle = parseBundle(device);
@@ -117,12 +126,7 @@ export async function sendEncryptedText(
     } catch (error) {
       throw new Error(`Signal session initialization failed: ${String(error)}`);
     }
-    const plaintext = encoder.encode(JSON.stringify({
-      version: 1,
-      type: "text",
-      body: body.trim(),
-      createdAt,
-    }));
+    const plaintext = encoder.encode(JSON.stringify(payload));
     let encrypted: SignalEncryptResult;
     try {
       encrypted = JSON.parse(
@@ -159,6 +163,48 @@ export async function sendEncryptedText(
       idempotencyKey,
     }, profile, session);
   }
+  void syncEncryptedBackup(profile, session).catch(() => undefined);
+}
+
+export async function sendEncryptedText(
+  profile: SecureProfile,
+  session: AuthSession,
+  recipientUsername: string,
+  body: string,
+): Promise<void> {
+  const normalizedBody = body.trim();
+  if (!normalizedBody) throw new Error("message must not be empty");
+  return sendEncryptedPayload(profile, session, recipientUsername, {
+    version: 1,
+    type: "text",
+    senderUsername: profile.username,
+    body: normalizedBody,
+    createdAt: Date.now(),
+  });
+}
+
+export async function sendEncryptedAttachment(
+  profile: SecureProfile,
+  session: AuthSession,
+  recipientUsername: string,
+  attachment: AttachmentReference,
+): Promise<void> {
+  if (
+    attachment.protocolVersion !== 1
+    || !attachment.objectId
+    || !attachment.fileKey
+    || attachment.chunkCount < 1
+    || attachment.plaintextSize < 1
+  ) {
+    throw new Error("invalid attachment reference");
+  }
+  return sendEncryptedPayload(profile, session, recipientUsername, {
+    version: 1,
+    type: "attachment",
+    senderUsername: profile.username,
+    attachment,
+    createdAt: Date.now(),
+  });
 }
 
 export async function receiveEncryptedTexts(
@@ -188,8 +234,21 @@ export async function receiveEncryptedTexts(
       ) as SignalDecryptResult;
       const payload = JSON.parse(
         decoder.decode(fromBase64Url(decrypted.plaintext)),
-      ) as { version: number; type: string; body: string; createdAt: number };
-      if (payload.version !== 1 || payload.type !== "text" || typeof payload.body !== "string") {
+      ) as SignalPayload;
+      if (
+        payload.version !== 1
+        || !Number.isFinite(payload.createdAt)
+        || !/^[a-z0-9_]{3,32}$/u.test(payload.senderUsername)
+        || (
+          payload.type === "text"
+            ? typeof payload.body !== "string"
+            : payload.type === "attachment"
+              ? payload.attachment?.protocolVersion !== 1
+                || !payload.attachment.objectId
+                || !payload.attachment.fileKey
+              : true
+        )
+      ) {
         throw new Error("invalid encrypted message payload");
       }
       profile.signal.state = decrypted.state;
@@ -203,11 +262,14 @@ export async function receiveEncryptedTexts(
       if (wrapper.messageType === "prekey") {
         await publishSignalPreKeys(profile, session);
       }
+      void syncEncryptedBackup(profile, session).catch(() => undefined);
       await acknowledgeEnvelope(envelope.envelopeId, session);
       messages.push({
         envelopeId: envelope.envelopeId,
         senderDeviceId: envelope.senderDeviceId,
-        body: payload.body,
+        senderUsername: payload.senderUsername,
+        body: payload.type === "text" ? payload.body : undefined,
+        attachment: payload.type === "attachment" ? payload.attachment : undefined,
         createdAt: payload.createdAt,
       });
     } catch {

@@ -6,11 +6,13 @@ export const wasm_decrypt_attachment_chunk: (a: number, b: number, c: number, d:
 export const wasm_decrypt_backup: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const wasm_decrypt_mls_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const wasm_decrypt_signal_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const wasm_decrypt_trust_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const wasm_derive_recovery_signing_keypair: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const wasm_encrypt_attachment_chunk: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const wasm_encrypt_backup: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const wasm_encrypt_mls_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const wasm_encrypt_signal_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const wasm_encrypt_trust_state: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const wasm_generate_attachment_key: () => [number, number, number, number];
 export const wasm_generate_recovery_secret: () => [number, number, number, number];
 export const wasm_generate_signing_keypair: () => [number, number, number, number];
