@@ -91,7 +91,7 @@ covechat/
 
 ### 本轮（2026-07-18）未提交的修改
 
-续作清单第 1/3/4/5/6 项 + 第 7 项部署验证脚本/文档（未在 Linux 真机跑过）+ 第 9 项安全/架构文档更新，本机自检全绿，待用户确认后提交推送。
+续作清单第 1/3/4/5/6 项 + 第 7 项部署验证脚本/文档（未在 Linux 真机跑过）+ 第 9 项安全/架构文档更新 + 第 8 项前端 E2E Origin/限流测试脚本（未在 dev server 跑过），本机自检全绿。已提交推送 b1adb88（第 1-9 轮），第 10 轮 E2E 脚本待提交。
 
 **服务端 `services/api/src/main.rs`**：
 - 新增 5 个业务测试（举报/拉黑/备份读取/恢复会话读备份/过期信封处理）+ 3 个辅助函数
@@ -198,7 +198,7 @@ covechat/
 5. ~~附件断点续传~~ ✅ 本轮完成：上传进度条（百分比+字节+块数）、单块失败重试（3次指数退避，4xx 不重试）、配额前置校验（>100MB 拒绝）、失败重试/取消按钮。剩余：真正的断点续传（记录已上传块，重试时跳过）需服务端支持 chunk 存在性查询接口。
 6. ~~统一 Origin 校验~~ ✅ 本轮完成：`AllowedOrigins` 结构从 `ALLOWED_ORIGINS` env 读取；`require_origin` 中间件对 POST/PUT/DELETE 校验（CSRF 纵深防御）；`anonymous_rate_limit` 函数基于 X-Forwarded-For 做 IP 限流（无 Redis 降级放行）；应用到 onboard_account(5/h)、create_challenge(10/m)、create_recovery_challenge(5/h)、read_directory(60/m authenticated)；events WebSocket handler 手动校验 Origin（GET 不经过中间件）；新增 6 个单元测试。剩余：账户级限流（按 deviceId 而非 IP，需 Redis sorted set）、Origin 校验集成测试（需启动真实服务端 + HTTP 客户端）。
 7. **真实 Linux Docker 部署验证**：本轮完成脚本/文档（`deploy/verify.sh` 8 项验证 + `compose.deploy.yml` 透传 `ALLOWED_ORIGINS` + `deploy.sh`/`deploy.ps1` .env 模板补字段 + README 宝塔面板 8 步部署文档）。**剩余**：用户需在 Linux 服务器上真实跑一次 `./deploy.sh` + `./deploy/verify.sh --public-url`，把验证输出贴回来确认 8 项全 PASS。本机 Windows 无 WSL 无法跑。
-8. **多浏览器 E2E / 故障注入 / 压力测试 / 模糊测试**。
+8. **多浏览器 E2E / 故障注入 / 压力测试 / 模糊测试**：本轮新建 `apps/web/e2e/origin-rate-limit.mjs`（4 个测试用例：非法 Origin POST→403 / 开发模式无 Origin 放行 / 限流 11 次→429 / WebSocket 非法 Origin→403），用 Node 内置 fetch + http 模块（不依赖 Playwright/Chrome），用环境变量 COVECHAT_ALLOWED_ORIGIN / COVECHAT_REDIS_URL 控制是否跑（无 Redis/无 Origin 校验时自动 skip）。package.json 新增 `test:e2e:origin` 脚本。**剩余**：需启动 dev server + 后端 + 可选 Redis 后跑 `npm run test:e2e:origin`；smoke.mjs 仍需启动 Chrome 本机验证；故障注入/压测/模糊测试未做。
 9. **更新协议文档、威胁模型、运维手册、安全响应政策**：本轮完成 architecture.md 重写 + threat-model.md 补充 CSRF/滥用 adversary 和 3 条新 invariant + data-flow.md 重写含限流端点表 + SECURITY.md 新增生产部署要求章节。protocol-state.md 和 key-lifecycle.md 不需要更新。**剩余**：运维手册（docs/ops-runbook.md）尚未新建，需用户确认是否要新建（含监控/备份/升级/故障排查）；README 的"宝塔面板部署"章节已覆盖基本运维操作。
 10. iOS/Android 原生客户端（后期）。
 
@@ -292,4 +292,16 @@ gh run list --repo txcxgzs/covechat --limit 3
   - URL 注入审查：用户名路径参数全用 `encodeURIComponent` 编码（api.ts 3 处）；WebSocket URL 基于自身 location，无注入
   - 结论：XSS/CSP/Trusted Types 防御健全，无需修改代码
   - 本机自检全绿（cargo test 22 passed / npm test 3 passed / 沿用第 6 轮结果，本轮纯审查无代码改动）
+  - 修改未提交，待用户确认后 git commit + push
+- **2026-07-18（第 10 轮）**：用户说"ok"→ 提交推送 b1adb88（18 文件 +2151/-41 行）到 origin/main，CI 跑 6m21s 全绿成功（前端构建/前端测试/Rust fmt/Rust clippy/Rust 测试/WASM 编译全过）。用户说"继续"→ 推进第 8 项前端 E2E：
+  - 用 subagent 新建 `apps/web/e2e/origin-rate-limit.mjs`（4 个测试用例覆盖第 6 轮 Origin 校验和限流）：
+    - 测试 1：POST /api/v1/onboarding 带非法 Origin（https://evil.example.com）→ 403（require_origin 中间件）
+    - 测试 2：开发模式无 Origin 放行 → 非 403 业务错误（与测试 1 互斥 skip）
+    - 测试 3：连续 POST /api/v1/auth/challenges/{device_id} 11 次 → 第 11 次 429（anonymous_rate_limit 10/m）
+    - 测试 4：WebSocket /api/v1/events/{device_id} 带非法 Origin → 403 不升级（events handler 手动校验）
+  - 设计要点：用 Node 内置 fetch + http/https 模块（不依赖 Playwright/Chrome，本机无需启动浏览器）；WebSocket 测试手写 Upgrade 握手请求（WebSocket 客户端不允许自定义 Origin）；用环境变量 COVECHAT_ALLOWED_ORIGIN / COVECHAT_REDIS_URL 控制 skip（避免无 Redis/无 Origin 校验时假性失败）
+  - `apps/web/package.json` 新增 `"test:e2e:origin": "node e2e/origin-rate-limit.mjs"` 脚本
+  - 代码审查：确认 create_challenge 先限流再查 device（测试 3 的 404 预期正确）；vite.config.ts 的 /api 代理 changeOrigin:false 保留客户端 Origin 头（测试用 /api/v1/... 路径正确）
+  - 本机自检全绿：node --check exit 0 / npm run typecheck 通过（package.json 改动未影响类型）
+  - 剩余：需启动 dev server + 后端 + 可选 Redis 后跑 `npm run test:e2e:origin` 验证真实行为
   - 修改未提交，待用户确认后 git commit + push
