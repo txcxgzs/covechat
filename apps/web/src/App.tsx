@@ -2,13 +2,14 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   BellOff, CheckCheck, CircleHelp, FileText, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Paperclip, Plus, Search, Send,
-  Languages, Settings, ShieldCheck, Smile, UserRound, UsersRound, X
+  Languages, Settings, ShieldCheck, Smile, Trash2, UserRound, UsersRound, X
 } from "lucide-react";
 import { getConversations, getSeedMessages, type Message } from "./data";
 import { copy, detectLocale, type Locale, type Translate } from "./i18n";
 import { SecurityGate } from "./security/SecurityGate";
 import type { SecureProfile } from "./security/vault";
-import type { AttachmentReference, AuthSession } from "@covechat/protocol";
+import type { AttachmentReference, AuthSession, DeviceRecord } from "@covechat/protocol";
+import { listOwnDevices, revokeOwnDevice } from "./security/api";
 import {
   downloadAndDecryptAttachment,
   encryptAndUploadAttachment,
@@ -492,14 +493,43 @@ function GroupWorkspace({ locale, profile, session, t }: {
   );
 }
 
-function SecurityPanel({ open, onClose, t }: { open: boolean; onClose: () => void; t: Translate }) {
-  const [verified, setVerified] = useState(false);
+function SecurityPanel({ open, onClose, locale, profile, session, t }: {
+  open: boolean;
+  onClose: () => void;
+  locale: Locale;
+  profile: SecureProfile;
+  session: AuthSession;
+  t: Translate;
+}) {
+  const [devices, setDevices] = useState<DeviceRecord[]>([]);
+  const [deviceError, setDeviceError] = useState("");
+  const zh = locale === "zh-CN";
+  const refreshDevices = async () => {
+    try {
+      setDevices(await listOwnDevices(session));
+      setDeviceError("");
+    } catch {
+      setDeviceError(zh ? "无法读取设备列表" : "Unable to load devices");
+    }
+  };
+  useEffect(() => {
+    if (open) void refreshDevices();
+  }, [open, session.accessToken]);
+  const revoke = async (deviceId: string) => {
+    if (!window.confirm(zh ? "确认撤销这台设备？撤销后它将无法登录或接收新消息。" : "Revoke this device? It will no longer sign in or receive new messages.")) return;
+    try {
+      await revokeOwnDevice(deviceId, session);
+      await refreshDevices();
+    } catch {
+      setDeviceError(zh ? "设备撤销失败" : "Device revocation failed");
+    }
+  };
   return (
     <aside className={open ? "security-panel open" : "security-panel"} aria-label="Conversation security">
       <button className="close-details icon-button" onClick={onClose} aria-label={t("closeSecurityDetails")}><X /></button>
       <div className="security-person">
-        <span className="avatar avatar-large">MC</span>
-        <h2>Maya Chen</h2>
+        <span className="avatar avatar-large">{profile.username.slice(0, 2).toUpperCase()}</span>
+        <h2>{profile.username}</h2>
         <span><LockKeyhole /> {t("endToEndEncrypted")}</span>
       </div>
       <section className="security-section">
@@ -507,16 +537,25 @@ function SecurityPanel({ open, onClose, t }: { open: boolean; onClose: () => voi
         <p>{t("securityOverviewBody")}</p>
       </section>
       <section className="security-section">
-        <h3><ShieldCheck />{t("verifySafetyNumber")}</h3>
-        <p>{t("verifySafetyNumberBody")}</p>
-        <code className="safety-number">7421 9286 3195 8204<br />1127 6654 9910 5733</code>
-        <button className={verified ? "verify verified" : "verify"} onClick={() => setVerified(true)}>
-          {verified ? <><CheckCheck /> {t("safetyNumberVerified")}</> : t("verifySafetyNumber")}
-        </button>
+        <h3><ShieldCheck />{zh ? "我的设备" : "My devices"}</h3>
+        <p>{zh ? "撤销丢失或不再使用的设备。当前设备不能在这里自我撤销。" : "Revoke lost or unused devices. The current device cannot revoke itself here."}</p>
+        {devices.map((device) => (
+          <div className="device-row" key={device.deviceId}>
+            <div>
+              <strong>{device.deviceId === profile.deviceId ? (zh ? "当前设备" : "Current device") : device.deviceId.slice(0, 8)}</strong>
+              <small>{new Date(device.createdAt * 1000).toLocaleString(locale)}</small>
+              {device.revokedAt ? <small>{zh ? "已撤销" : "Revoked"}</small> : null}
+            </div>
+            {device.deviceId !== profile.deviceId && !device.revokedAt ? (
+              <button className="icon-button" onClick={() => void revoke(device.deviceId)} title={zh ? "撤销设备" : "Revoke device"}><Trash2 /></button>
+            ) : null}
+          </div>
+        ))}
+        {deviceError ? <p className="fail-closed">{deviceError}</p> : null}
       </section>
       <section className="security-section details">
         <h3><LockKeyhole />{t("encryptionDetails")}</h3>
-        <dl><dt>{t("protocol")}</dt><dd>Signal PQXDH + Triple Ratchet</dd><dt>{t("identityKey")}</dt><dd>{t("unavailablePreview")}</dd></dl>
+        <dl><dt>{t("protocol")}</dt><dd>Signal PQXDH + Triple Ratchet / RFC 9420 MLS</dd><dt>{t("identityKey")}</dt><dd>{profile.accountKeys.publicKey.slice(0, 24)}…</dd></dl>
         <p className="fail-closed">{t("failClosed")}</p>
       </section>
     </aside>
@@ -560,7 +599,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
               onDetails={() => setDetailsOpen(true)}
               t={t}
             />
-            <SecurityPanel open={detailsOpen} onClose={() => setDetailsOpen(false)} t={t} />
+            <SecurityPanel open={detailsOpen} onClose={() => setDetailsOpen(false)} locale={locale} profile={profile} session={session} t={t} />
           </>
         ) : (
           <GroupWorkspace locale={locale} profile={profile} session={session} t={t} />

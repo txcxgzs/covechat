@@ -122,6 +122,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .security-section h3 { display: flex; align-items: center; gap: 9px; margin: 0 0 9px; font-size: 13px; }
 .security-section h3 svg { width: 19px; color: var(--teal); }
 .security-section p { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 0 0 14px; }
+.device-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.device-row div { min-width: 0; display: grid; gap: 3px; }
+.device-row strong { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.device-row small { color: var(--muted); font-size: 10px; }
+.device-row .icon-button { color: #a63d40; flex: 0 0 auto; }
 .safety-number { display: block; background: transparent; color: #173047; letter-spacing: .06em; line-height: 2; font-size: 12px; }
 .verify { width: 100%; border: 0; border-radius: 6px; background: var(--teal); color: white; padding: 11px; font-weight: 700; margin-top: 11px; }
 .verify.verified { background: #e4f3ec; color: #24724d; display: flex; justify-content: center; gap: 7px; }

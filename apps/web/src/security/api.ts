@@ -6,6 +6,7 @@ import type {
   EncryptedBackup,
   EncryptedEnvelope,
   EncryptedAttachment,
+  DeviceRecord,
 } from "@covechat/protocol";
 import {
   signWithAccount,
@@ -155,6 +156,25 @@ export async function lookupDirectory(
   });
   if (!response.ok) throw new Error(`directory lookup failed: ${response.status}`);
   return response.json() as Promise<DirectoryResponse>;
+}
+
+export async function listOwnDevices(session: AuthSession): Promise<DeviceRecord[]> {
+  const response = await fetch("/api/v1/devices", {
+    headers: authenticatedHeaders(session),
+  });
+  if (!response.ok) throw new Error(`device list failed: ${response.status}`);
+  return response.json() as Promise<DeviceRecord[]>;
+}
+
+export async function revokeOwnDevice(
+  deviceId: string,
+  session: AuthSession,
+): Promise<void> {
+  const response = await fetch(`/api/v1/devices/${deviceId}/revoke`, {
+    method: "POST",
+    headers: authenticatedHeaders(session),
+  });
+  if (!response.ok) throw new Error(`device revocation failed: ${response.status}`);
 }
 
 export async function readMailbox(

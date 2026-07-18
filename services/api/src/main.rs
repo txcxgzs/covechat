@@ -316,7 +316,7 @@ fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/onboarding", post(onboard_account))
-        .route("/v1/devices", post(register_device))
+        .route("/v1/devices", get(list_devices).post(register_device))
         .route("/v1/devices/{device_id}/prekeys", put(update_prekeys))
         .route("/v1/devices/{device_id}/revoke", post(revoke_device))
         .route("/v1/auth/challenges/{device_id}", post(create_challenge))
@@ -532,6 +532,31 @@ async fn revoke_device(
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
     StatusCode::NO_CONTENT
+}
+
+async fn list_devices(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<Vec<DeviceRecord>>) {
+    let mut store = state.inner.lock().await;
+    let Some(caller_id) = authenticated_device(&headers, &mut store) else {
+        return (StatusCode::UNAUTHORIZED, Json(Vec::new()));
+    };
+    let Some(username) = store
+        .devices
+        .get(&caller_id)
+        .map(|device| device.username.clone())
+    else {
+        return (StatusCode::UNAUTHORIZED, Json(Vec::new()));
+    };
+    let mut devices = store
+        .devices
+        .values()
+        .filter(|device| device.username == username)
+        .cloned()
+        .collect::<Vec<_>>();
+    devices.sort_by_key(|device| device.created_at);
+    (StatusCode::OK, Json(devices))
 }
 
 async fn create_challenge(
