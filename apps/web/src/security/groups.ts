@@ -5,6 +5,7 @@ import type {
 import initCrypto, {
   wasm_mls_add_member,
   wasm_mls_create_group,
+  wasm_mls_delete_group,
   wasm_mls_encrypt,
   wasm_mls_join_group,
   wasm_mls_process,
@@ -67,6 +68,10 @@ type MlsEnvelope = {
   name?: string;
   ciphertext: string;
 };
+
+type MlsApplicationPayload =
+  | { version: 1; type: "text"; body: string; createdAt: number }
+  | { version: 1; type: "leave-request"; createdAt: number };
 
 export type DecryptedGroupMessage = {
   envelopeId: string;
@@ -172,6 +177,19 @@ export function isAuthorizedGroupCommit(
 ): boolean {
   const metadata = groups(profile).find((group) => group.groupId === groupId);
   return Boolean(metadata && (metadata.adminDeviceIds ?? []).includes(senderDeviceId));
+}
+
+export function groupLeaveRequestRecipient(profile: SecureProfile, groupId: string): string {
+  const metadata = groups(profile).find((group) => group.groupId === groupId);
+  if (!metadata) throw new Error("group not found");
+  if (isGroupAdmin(profile, groupId)) {
+    throw new Error("an admin must transfer administration before leaving the group");
+  }
+  const adminDeviceId = metadata.adminDeviceIds?.[0];
+  if (!adminDeviceId || !metadata.memberDeviceIds.includes(adminDeviceId)) {
+    throw new Error("group has no reachable administrator");
+  }
+  return adminDeviceId;
 }
 
 /// 切换群邀请策略。仅管理员可调用；非管理员调用抛错。
@@ -361,27 +379,53 @@ export async function sendEncryptedGroupText(
   const metadata = groups(profile).find((group) => group.groupId === groupId);
   if (!metadata) throw new Error("group not found");
   if (!body.trim()) throw new Error("message must not be empty");
-  const plaintext = encoder.encode(JSON.stringify({
+  await sendEncryptedGroupApplication(profile, session, metadata, {
     version: 1,
     type: "text",
     body: body.trim(),
     createdAt: Date.now(),
-  }));
+  });
+}
+
+async function sendEncryptedGroupApplication(
+  profile: SecureProfile,
+  session: AuthSession,
+  metadata: MlsGroupMetadata,
+  payload: MlsApplicationPayload,
+  recipients = metadata.memberDeviceIds,
+): Promise<void> {
+  const plaintext = encoder.encode(JSON.stringify(payload));
   const result = JSON.parse(wasm_mls_encrypt(
     JSON.stringify(profile.mls.state),
-    groupId,
+    metadata.groupId,
     toBase64Url(plaintext),
   )) as MlsMessageResult;
   profile.mls.state = result.state;
   metadata.epoch = result.epoch;
   await saveMlsState(profile);
   void syncEncryptedBackup(profile, session).catch(() => undefined);
-  await deliver(profile, session, metadata, metadata.memberDeviceIds, {
+  await deliver(profile, session, metadata, recipients, {
     protocol: "mls-rfc9420",
     kind: "application",
-    groupId,
+    groupId: metadata.groupId,
     ciphertext: result.ciphertext,
   });
+}
+
+export async function requestEncryptedGroupLeave(
+  profile: SecureProfile,
+  session: AuthSession,
+  groupId: string,
+): Promise<void> {
+  await ensureCrypto();
+  const metadata = groups(profile).find((group) => group.groupId === groupId);
+  if (!metadata) throw new Error("group not found");
+  const adminDeviceId = groupLeaveRequestRecipient(profile, groupId);
+  await sendEncryptedGroupApplication(profile, session, metadata, {
+    version: 1,
+    type: "leave-request",
+    createdAt: Date.now(),
+  }, [adminDeviceId]);
 }
 
 export async function receiveEncryptedGroupMessages(
@@ -432,17 +476,58 @@ export async function receiveEncryptedGroupMessages(
       if (!doesMlsSenderMatchEnvelope(processed.senderIdentity, envelope.senderDeviceId)) {
         throw new Error("MLS sender identity does not match the authenticated envelope sender");
       }
+      if (processed.kind !== wrapper.kind) {
+        throw new Error("MLS content kind does not match its authenticated envelope wrapper");
+      }
+      let payload: MlsApplicationPayload | undefined;
+      if (processed.kind === "application") {
+        if (!processed.plaintext) throw new Error("MLS application plaintext is missing");
+        payload = JSON.parse(
+          decoder.decode(fromBase64Url(processed.plaintext)),
+        ) as MlsApplicationPayload;
+        if (payload.version !== 1 || !Number.isSafeInteger(payload.createdAt)) {
+          throw new Error("invalid MLS application payload");
+        }
+        if (payload.type === "leave-request") {
+          const currentMetadata = groups(profile).find((group) => group.groupId === wrapper.groupId);
+          if (!currentMetadata || !isGroupAdmin(profile, wrapper.groupId)) {
+            throw new Error("only an admin can process a group leave request");
+          }
+          if (!currentMetadata.memberDeviceIds.includes(envelope.senderDeviceId)) {
+            throw new Error("leave requester is not a current group member");
+          }
+        } else if (
+          payload.type !== "text"
+          || typeof payload.body !== "string"
+          || !payload.body.trim()
+        ) {
+          throw new Error("invalid MLS application payload");
+        }
+      }
       profile.mls.state = processed.state;
-      updateMetadata(profile, processed);
+      const metadata = updateMetadata(profile, processed);
+      if (processed.kind === "commit" && !metadata.memberDeviceIds.includes(profile.deviceId)) {
+        profile.mls.state = JSON.parse(wasm_mls_delete_group(
+          JSON.stringify(profile.mls.state),
+          wrapper.groupId,
+        )) as Record<string, unknown>;
+        profile.mls.groups = groups(profile).filter((group) => group.groupId !== wrapper.groupId);
+        await saveMlsState(profile);
+        void syncEncryptedBackup(profile, session).catch(() => undefined);
+        await acknowledgeEnvelope(envelope.envelopeId, session);
+        continue;
+      }
       await saveMlsState(profile);
       void syncEncryptedBackup(profile, session).catch(() => undefined);
-      await acknowledgeEnvelope(envelope.envelopeId, session);
-      if (processed.kind !== "application" || !processed.plaintext) continue;
-      const payload = JSON.parse(
-        decoder.decode(fromBase64Url(processed.plaintext)),
-      ) as { version: number; type: string; body: string; createdAt: number };
-      if (payload.version !== 1 || payload.type !== "text") {
-        throw new Error("invalid MLS application payload");
+      if (processed.kind !== "application") {
+        await acknowledgeEnvelope(envelope.envelopeId, session);
+        continue;
+      }
+      if (!payload) throw new Error("MLS application payload is missing");
+      if (payload.type === "leave-request") {
+        await removeGroupMember(profile, session, wrapper.groupId, envelope.senderDeviceId);
+        await acknowledgeEnvelope(envelope.envelopeId, session);
+        continue;
       }
       messages.push({
         envelopeId: envelope.envelopeId,
@@ -451,6 +536,7 @@ export async function receiveEncryptedGroupMessages(
         body: payload.body,
         createdAt: payload.createdAt,
       });
+      await acknowledgeEnvelope(envelope.envelopeId, session);
     } catch {
       // Fail closed and leave unknown or out-of-order MLS messages queued.
     }

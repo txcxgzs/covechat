@@ -426,6 +426,26 @@ pub fn process_message(
     })
 }
 
+pub fn delete_group(state: MlsState, group_id: &str) -> Result<MlsState, String> {
+    let provider = provider_from_state(&state)?;
+    let mut group = load_group(&provider, group_id)?;
+    group
+        .delete(provider.storage())
+        .map_err(|error| error.to_string())?;
+    let groups = state
+        .groups
+        .iter()
+        .filter(|candidate| candidate.as_str() != group_id)
+        .cloned()
+        .collect();
+    export_state(
+        &provider,
+        state.identity,
+        state.signature_public_key,
+        groups,
+    )
+}
+
 pub fn remove_member(
     state: MlsState,
     group_id: &str,
@@ -514,6 +534,9 @@ mod tests {
         bob.state = bob_commit.state;
         assert_eq!(bob_commit.epoch, 2);
         assert_eq!(bob_commit.sender_identity, "alice/device-1");
+        bob.state = delete_group(bob.state, &created.group_id).expect("delete removed group");
+        assert!(!bob.state.groups.contains(&created.group_id));
+        assert!(process_message(bob.state.clone(), &created.group_id, &removed.commit).is_err());
 
         let after_removal =
             encrypt_message(alice.state, &created.group_id, b"secret after removal")

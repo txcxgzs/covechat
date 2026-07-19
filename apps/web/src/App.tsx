@@ -8,7 +8,7 @@ import type { Conversation, Message } from "./data";
 import { copy, detectLocale, type Locale, type Translate } from "./i18n";
 import { PWA_APPLY_UPDATE_EVENT, PWA_UPDATE_READY_EVENT } from "./pwa-updates";
 import { SecurityGate } from "./security/SecurityGate";
-import { saveMlsState, type SecureProfile } from "./security/vault";
+import { type SecureProfile } from "./security/vault";
 import type { AttachmentReference, AuthSession, DeviceRecord } from "@covechat/protocol";
 import {
   listBlockedUsers,
@@ -37,6 +37,7 @@ import {
   listEncryptedGroups,
   receiveEncryptedGroupMessages,
   removeGroupMember,
+  requestEncryptedGroupLeave,
   sendEncryptedGroupText,
   setGroupInvitePolicy,
 } from "./security/groups";
@@ -640,22 +641,16 @@ function GroupWorkspace({ locale, profile, session, t }: {
     }
   }
 
-  // 退出群组：本地删除群元数据并备份。MLS 协议层 self-removal 受限，
-  // 这里采用本地退出（不再接收/解密该群消息），不发起 remove_member commit。
   async function leaveGroup() {
     if (!selected) return;
+    if (isAdmin) {
+      setStatus(t("adminTransferBeforeLeave"));
+      return;
+    }
     if (!window.confirm(t("leaveGroupConfirm"))) return;
     try {
-      // 从本地 MLS state 的 groups 列表移除元数据，保留底层 OpenMLS 状态以防误操作。
-      const allGroups = listEncryptedGroups(profile);
-      const remaining = allGroups.filter((group) => group.groupId !== selected.groupId);
-      profile.mls.groups = [...remaining];
-      await saveMlsState(profile);
-      void syncEncryptedBackup(profile, session).catch(() => undefined);
-      setSelectedGroupId("");
-      setMessages([]);
-      refreshGroups();
-      setStatus("");
+      await requestEncryptedGroupLeave(profile, session, selected.groupId);
+      setStatus(t("leaveRequestSent"));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : t("vaultError"));
     }

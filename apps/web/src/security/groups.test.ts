@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SecureProfile } from "./vault";
-import { doesMlsSenderMatchEnvelope, isAuthorizedGroupCommit } from "./groups";
+import {
+  doesMlsSenderMatchEnvelope,
+  groupLeaveRequestRecipient,
+  isAuthorizedGroupCommit,
+} from "./groups";
 
 function profileWithAdmins(adminDeviceIds: string[]): SecureProfile {
   return {
@@ -37,5 +41,20 @@ describe("MLS sender binding", () => {
     expect(doesMlsSenderMatchEnvelope("alice/device-1", "device-1")).toBe(true);
     expect(doesMlsSenderMatchEnvelope("alice/device-1", "device-2")).toBe(false);
     expect(doesMlsSenderMatchEnvelope("invalid", "device-1")).toBe(false);
+  });
+});
+
+describe("encrypted group leave routing", () => {
+  it("routes a member leave request only to the current admin", () => {
+    expect(groupLeaveRequestRecipient(
+      profileWithAdmins(["device-admin"]),
+      "group-1",
+    )).toBe("device-admin");
+  });
+
+  it("requires an admin transfer before the current admin leaves", () => {
+    const profile = profileWithAdmins(["device-local"]);
+    expect(() => groupLeaveRequestRecipient(profile, "group-1"))
+      .toThrow("transfer administration");
   });
 });

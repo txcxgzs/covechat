@@ -23,9 +23,10 @@ mod signal_store;
 pub use mls_protocol::{
     MlsCommitResult, MlsDevice, MlsGroupResult, MlsMessageResult, MlsProcessedResult, MlsState,
     add_member as mls_add_member, create_device as mls_create_device,
-    create_group as mls_create_group, encrypt_message as mls_encrypt_message,
-    join_group as mls_join_group, process_message as mls_process_message,
-    refresh_key_package as mls_refresh_key_package, remove_member as mls_remove_member,
+    create_group as mls_create_group, delete_group as mls_delete_group,
+    encrypt_message as mls_encrypt_message, join_group as mls_join_group,
+    process_message as mls_process_message, refresh_key_package as mls_refresh_key_package,
+    remove_member as mls_remove_member,
 };
 #[cfg(feature = "signal-protocol")]
 pub use signal_protocol::{
@@ -624,6 +625,13 @@ pub fn wasm_mls_remove_member(
         &mls_remove_member(parse_mls_state(state_json)?, group_id, leaf_index)
             .map_err(mls_js_error)?,
     )
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mls-protocol"))]
+#[wasm_bindgen]
+pub fn wasm_mls_delete_group(state_json: &str, group_id: &str) -> Result<String, JsValue> {
+    console_error_panic_hook::set_once();
+    serialize_mls(&mls_delete_group(parse_mls_state(state_json)?, group_id).map_err(mls_js_error)?)
 }
 
 #[cfg(target_arch = "wasm32")]

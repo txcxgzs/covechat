@@ -19,6 +19,7 @@ export const wasm_generate_signing_keypair: () => [number, number, number, numbe
 export const wasm_mls_add_member: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const wasm_mls_create_device: (a: number, b: number) => [number, number, number, number];
 export const wasm_mls_create_group: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const wasm_mls_delete_group: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const wasm_mls_encrypt: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const wasm_mls_join_group: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const wasm_mls_process: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];

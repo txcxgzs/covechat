@@ -37,6 +37,8 @@ export function wasm_mls_create_device(identity: string): string;
 
 export function wasm_mls_create_group(state_json: string, group_id_base64: string): string;
 
+export function wasm_mls_delete_group(state_json: string, group_id: string): string;
+
 export function wasm_mls_encrypt(state_json: string, group_id: string, plaintext_base64: string): string;
 
 export function wasm_mls_join_group(state_json: string, welcome: string): string;
@@ -83,6 +85,7 @@ export interface InitOutput {
     readonly wasm_mls_add_member: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly wasm_mls_create_device: (a: number, b: number) => [number, number, number, number];
     readonly wasm_mls_create_group: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly wasm_mls_delete_group: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wasm_mls_encrypt: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
     readonly wasm_mls_join_group: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly wasm_mls_process: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
