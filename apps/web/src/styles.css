@@ -441,9 +441,20 @@ body { overflow: hidden; background: #eef3f6; }
   background: #112f45;
 }
 .wallpaper-midnight .disappearing-control select { color: #d8e6ec; border-color: #35566a; background: #193b51; }
-.wallpaper-midnight .composer { box-shadow: 0 10px 34px #06192370; }
-.wallpaper-midnight .composer::before { content: ""; position: absolute; inset: -10px -14px -18px; z-index: -1; border-radius: 30px; background: #112f45; }
-.wallpaper-midnight .composer { position: relative; z-index: 1; }
+.wallpaper-midnight .composer {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  color: #18354c;
+  background: #fff !important;
+  box-shadow: 0 10px 34px #06192370;
+}
+.wallpaper-midnight .composer::before { content: none; }
+.wallpaper-midnight .composer textarea,
+.wallpaper-midnight .composer-actions,
+.wallpaper-midnight .reply-preview { color: #18354c; background: #fff; }
+.wallpaper-midnight .composer textarea::placeholder { color: #718394; opacity: 1; }
+.wallpaper-midnight .composer .icon-button { color: #28485d; }
 .wallpaper-midnight .date-rule { color: #d7e8ef; background: #0e2739b8; }
 .wallpaper-midnight .group-message-empty { color: #cfdee5; background: #102b3dc7; border-color: #ffffff16; }
 .wallpaper-midnight .group-message-empty strong { color: white; }
