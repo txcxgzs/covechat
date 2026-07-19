@@ -1,8 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BellOff, CheckCheck, CircleHelp, FileText, FlaskConical, Image,
-  LockKeyhole, Menu, MessageCircle, Paperclip, Plus, Search, Send,
-  Languages, Settings, ShieldCheck, Smile, Trash2, UserRound, UsersRound, Volume2, VolumeX, X
+  BellOff, CheckCheck, CheckCircle2, CircleHelp, Copy as CopyIcon, FileText, FlaskConical, Image,
+  LockKeyhole, Menu, MessageCircle, Palette, Paperclip, Plus, Search, Send,
+  Languages, Reply, Settings, ShieldCheck, Smile, Sparkles, Trash2, UserRound, UsersRound, Volume2, VolumeX, X
 } from "lucide-react";
 import type { Conversation, Message } from "./data";
 import { copy, detectLocale, type Locale, type Translate } from "./i18n";
@@ -58,19 +58,23 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+type AppView = "messages" | "groups" | "settings";
+type WallpaperStyle = "cove" | "plain" | "midnight";
+
 function Navigation({ locale, t, onLocaleChange, profileName, activeView, onViewChange, soundEnabled, onSoundToggle }: {
   locale: Locale;
   t: Translate;
   onLocaleChange: () => void;
   profileName?: string;
-  activeView: "messages" | "groups";
-  onViewChange: (view: "messages" | "groups") => void;
+  activeView: AppView;
+  onViewChange: (view: AppView) => void;
   soundEnabled: boolean;
   onSoundToggle: () => void;
 }) {
   const nav = [
     { id: "messages" as const, label: t("messages"), icon: MessageCircle },
     { id: "groups" as const, label: t("groups"), icon: UsersRound },
+    { id: "settings" as const, label: t("settings"), icon: Settings },
   ];
   return (
     <nav className="navigation" aria-label="Primary">
@@ -183,9 +187,11 @@ function ChatHeader({ onDetails, recipient, onRecipientChange, t }: {
   );
 }
 
-function Composer({ onSend, onAttachment, t }: {
+function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
   onSend: (message: string) => void;
   onAttachment: (file: File) => void;
+  replyTo?: Message;
+  onCancelReply: () => void;
   t: Translate;
 }) {
   const [draft, setDraft] = useState("");
@@ -195,11 +201,19 @@ function Composer({ onSend, onAttachment, t }: {
     event.preventDefault();
     const value = draft.trim();
     if (!value) return;
-    onSend(value);
+    onSend(replyTo ? `↪ ${replyTo.text.replace(/\s+/gu, " ").slice(0, 96)}\n${value}` : value);
+    onCancelReply();
     setDraft("");
   }
   return (
     <form className="composer" onSubmit={submit}>
+      {replyTo ? (
+        <div className="reply-preview">
+          <Reply />
+          <span><strong>{t("reply")}</strong><small>{replyTo.text}</small></span>
+          <button type="button" className="icon-button" onClick={onCancelReply}><X /></button>
+        </div>
+      ) : null}
       <textarea aria-label={t("messageMaya")} placeholder={t("messageMaya")} value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
@@ -233,6 +247,61 @@ function Composer({ onSend, onAttachment, t }: {
   );
 }
 
+function InteractiveMessage({ locale, message, onReply }: {
+  locale: Locale;
+  message: Message;
+  onReply: (message: Message) => void;
+}) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | undefined>(undefined);
+  const [selected, setSelected] = useState(false);
+  const pointerStart = useRef<{ x: number; y: number } | undefined>(undefined);
+  const isChinese = locale === "zh-CN";
+  const lines = message.text.split("\n");
+  const quoted = lines[0]?.startsWith("↪ ") ? lines[0].slice(2) : "";
+  const body = quoted ? lines.slice(1).join("\n") : message.text;
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(undefined);
+    window.addEventListener("pointerdown", close, { once: true });
+    return () => window.removeEventListener("pointerdown", close);
+  }, [menu]);
+
+  return (
+    <article
+      className={`message-row ${message.from} interactive-message ${selected ? "message-selected" : ""}`}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        playUiSound("open");
+        setMenu({ x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 170) });
+      }}
+      onPointerDown={(event) => { pointerStart.current = { x: event.clientX, y: event.clientY }; }}
+      onPointerUp={(event) => {
+        const start = pointerStart.current;
+        pointerStart.current = undefined;
+        if (start && event.clientX - start.x < -52 && Math.abs(event.clientY - start.y) < 44) {
+          playUiSound("open");
+          onReply(message);
+        }
+      }}
+    >
+      {message.from === "them" ? <span className="avatar avatar-small">MC</span> : null}
+      <div className="bubble">
+        {quoted ? <blockquote>{quoted}</blockquote> : null}
+        <p>{body}</p>
+        <footer><time>{message.time}</time>{message.delivered ? <CheckCheck aria-label={isChinese ? "已送达" : "Delivered"} /> : <LockKeyhole aria-label={isChinese ? "已加密" : "Encrypted"} />}</footer>
+      </div>
+      {menu ? (
+        <div className="message-menu" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()}>
+          <button onClick={() => { onReply(message); setMenu(undefined); }}><Reply />{isChinese ? "回复" : "Reply"}</button>
+          <button onClick={() => { void navigator.clipboard.writeText(message.text); playUiSound("success"); setMenu(undefined); }}><CopyIcon />{isChinese ? "复制" : "Copy"}</button>
+          <button onClick={() => { setSelected((value) => !value); setMenu(undefined); }}><CheckCircle2 />{selected ? (isChinese ? "取消选择" : "Unselect") : (isChinese ? "选择" : "Select")}</button>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientChange, profile, recipient, session, t }: {
   locale: Locale;
   onDetails: () => void;
@@ -245,6 +314,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
   onHistoryChange: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [replyTo, setReplyTo] = useState<Message>();
   const [attachments, setAttachments] = useState<AttachmentReference[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState("");
   const [disappearAfter, setDisappearAfter] = useState(0);
@@ -457,15 +527,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
       </div>
       <section className="messages" aria-label="Encrypted conversation" aria-live="polite">
         <div className="date-rule"><span>{t("today")}</span></div>
-        {messages.map((message) => (
-          <article className={`message-row ${message.from}`} key={message.id}>
-            {message.from === "them" ? <span className="avatar avatar-small">MC</span> : null}
-            <div className="bubble">
-              <p>{message.text}</p>
-              <footer><time>{message.time}</time>{message.delivered ? <CheckCheck aria-label={t("delivered")} /> : <LockKeyhole aria-label={t("encrypted")} />}</footer>
-            </div>
-          </article>
-        ))}
+        {messages.map((message) => <InteractiveMessage key={message.id} locale={locale} message={message} onReply={setReplyTo} />)}
         {attachments.map((attachment) => (
           <article className="message-row me" key={attachment.objectId}>
             <div className="bubble attachment-bubble">
@@ -512,6 +574,8 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
       </section>
       <Composer
         t={t}
+        replyTo={replyTo}
+        onCancelReply={() => setReplyTo(undefined)}
         onAttachment={(file) => void uploadAttachment(file)}
         onSend={(text) => void sendText(text)}
       />
@@ -537,6 +601,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
   const [status, setStatus] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [replyTo, setReplyTo] = useState<Message>();
   const selected = availableGroups.find((group) => group.groupId === selectedGroupId);
   // 当前设备是否为该群管理员（控制移除成员、邀请策略等管理 UI 的可见性）
   const isAdmin = selected ? isGroupAdmin(profile, selected.groupId) : false;
@@ -605,7 +670,8 @@ function GroupWorkspace({ locale, profile, session, t }: {
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!selected || !draft.trim()) return;
-    const body = draft.trim();
+    const text = draft.trim();
+    const body = replyTo ? `↪ ${replyTo.text.replace(/\s+/gu, " ").slice(0, 96)}\n${text}` : text;
     try {
       await sendEncryptedGroupText(profile, session, selected.groupId, body);
       setMessages((current) => [...current, {
@@ -620,6 +686,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
       }]);
       playUiSound("send");
       setDraft("");
+      setReplyTo(undefined);
       setStatus("");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : t("vaultError"));
@@ -750,17 +817,17 @@ function GroupWorkspace({ locale, profile, session, t }: {
                   <p>{t("mlsProtocol")} · {selected.memberDeviceIds.length} {t("groupMembers")}</p>
                 </div>
               ) : null}
-              {messages.map((message) => (
-                <article className={`message-row ${message.from}`} key={message.id}>
-                  <div className="bubble">
-                    <p>{message.text}</p>
-                    <footer><time>{message.time}</time><CheckCheck /></footer>
-                  </div>
-                </article>
-              ))}
+              {messages.map((message) => <InteractiveMessage key={message.id} locale={locale} message={message} onReply={setReplyTo} />)}
               {status ? <p className="attachment-status" role="status">{status}</p> : null}
             </section>
             <form className="composer group-composer" onSubmit={(event) => void send(event)}>
+              {replyTo ? (
+                <div className="reply-preview">
+                  <Reply />
+                  <span><strong>{t("reply")}</strong><small>{replyTo.text}</small></span>
+                  <button type="button" className="icon-button" onClick={() => setReplyTo(undefined)}><X /></button>
+                </div>
+              ) : null}
               <textarea
                 aria-label={t("messageMaya")}
                 placeholder={t("messageMaya")}
@@ -955,19 +1022,61 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
   );
 }
 
+function SettingsWorkspace({ locale, motionEnabled, onMotionChange, onSoundChange, onWallpaperChange, soundEnabled, wallpaper }: {
+  locale: Locale;
+  motionEnabled: boolean;
+  onMotionChange: (enabled: boolean) => void;
+  onSoundChange: (enabled: boolean) => void;
+  onWallpaperChange: (wallpaper: WallpaperStyle) => void;
+  soundEnabled: boolean;
+  wallpaper: WallpaperStyle;
+}) {
+  const zh = locale === "zh-CN";
+  return (
+    <main className="settings-workspace">
+      <header className="settings-heading"><span><Settings /></span><div><h1>{zh ? "界面与体验" : "Appearance & experience"}</h1><p>{zh ? "调整 CoveChat 在此设备上的外观、动画和声音。" : "Tune CoveChat's appearance, motion and sound on this device."}</p></div></header>
+      <div className="settings-content">
+        <section className="settings-card">
+          <div className="settings-card-title"><Palette /><div><h2>{zh ? "聊天壁纸" : "Chat wallpaper"}</h2><p>{zh ? "选择消息区域的背景氛围" : "Choose the atmosphere behind your messages"}</p></div></div>
+          <div className="wallpaper-options">
+            {(["cove", "plain", "midnight"] as const).map((option) => (
+              <button className={`wallpaper-option wallpaper-preview-${option} ${wallpaper === option ? "selected" : ""}`} key={option} onClick={() => { playUiSound("navigate"); onWallpaperChange(option); }}>
+                <span className="wallpaper-swatch" />
+                <strong>{option === "cove" ? (zh ? "海湾纹理" : "Cove pattern") : option === "plain" ? (zh ? "纯净浅色" : "Clean light") : (zh ? "深海蓝" : "Deep ocean")}</strong>
+                {wallpaper === option ? <CheckCircle2 /> : null}
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="settings-card">
+          <div className="settings-card-title"><Sparkles /><div><h2>{zh ? "动态效果" : "Motion"}</h2><p>{zh ? "弹性抽屉、消息入场和页面转场" : "Spring drawers, message entrances and page transitions"}</p></div></div>
+          <label className="settings-switch"><span><strong>{zh ? "灵动动画" : "Expressive motion"}</strong><small>{zh ? "关闭后保留必要的状态变化" : "Essential state changes remain visible when disabled"}</small></span><input type="checkbox" checked={motionEnabled} onChange={(event) => onMotionChange(event.target.checked)} /><i /></label>
+          <label className="settings-switch"><span><strong>{zh ? "界面音效" : "Interface sounds"}</strong><small>{zh ? "发送、接收和导航的轻量反馈" : "Subtle feedback for sending, receiving and navigation"}</small></span><input type="checkbox" checked={soundEnabled} onChange={(event) => onSoundChange(event.target.checked)} /><i /></label>
+        </section>
+        <section className="settings-note"><ShieldCheck /><p>{zh ? "这些设置仅保存在当前设备，不会进入加密消息或云备份。" : "These preferences stay on this device and are never included in encrypted messages or cloud backups."}</p></section>
+      </div>
+    </main>
+  );
+}
+
 function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSession }) {
   const [locale, setLocale] = useState<Locale>(detectLocale);
   const t: Translate = (key) => copy[locale][key];
   const [detailsOpen, setDetailsOpen] = useState(
-    () => window.matchMedia("(min-width: 1161px)").matches,
+    false,
   );
   const [noticeOpen, setNoticeOpen] = useState(true);
   const [updateReady, setUpdateReady] = useState(false);
-  const [activeView, setActiveView] = useState<"messages" | "groups">("messages");
+  const [activeView, setActiveView] = useState<AppView>("messages");
   const [recipient, setRecipient] = useState("");
   const [lastReceivedText, setLastReceivedText] = useState<string>();
   const [historyRevision, setHistoryRevision] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(uiSoundsEnabled);
+  const [motionEnabled, setMotionEnabled] = useState(() => localStorage.getItem("covechat-motion") !== "off");
+  const [wallpaper, setWallpaper] = useState<WallpaperStyle>(() => {
+    const stored = localStorage.getItem("covechat-wallpaper");
+    return stored === "plain" || stored === "midnight" ? stored : "cove";
+  });
   const handleHistoryChange = useCallback(() => {
     setHistoryRevision((current) => current + 1);
   }, []);
@@ -984,7 +1093,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
     return () => window.removeEventListener(PWA_UPDATE_READY_EVENT, showUpdate);
   }, []);
   return (
-    <div className="app">
+    <div className={`app wallpaper-${wallpaper} ${motionEnabled ? "" : "motion-disabled"}`}>
       <div className={detailsOpen ? "workspace security-open" : "workspace"}>
         <Navigation
           activeView={activeView}
@@ -1017,8 +1126,18 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
             />
             <SecurityPanel lastReceivedText={lastReceivedText} open={detailsOpen} onClose={() => { playUiSound("open"); setDetailsOpen(false); }} locale={locale} profile={profile} recipient={recipient} session={session} t={t} />
           </>
-        ) : (
+        ) : activeView === "groups" ? (
           <GroupWorkspace locale={locale} profile={profile} session={session} t={t} />
+        ) : (
+          <SettingsWorkspace
+            locale={locale}
+            motionEnabled={motionEnabled}
+            soundEnabled={soundEnabled}
+            wallpaper={wallpaper}
+            onMotionChange={(enabled) => { setMotionEnabled(enabled); localStorage.setItem("covechat-motion", enabled ? "on" : "off"); }}
+            onSoundChange={(enabled) => { setSoundEnabled(enabled); setUiSoundsEnabled(enabled); }}
+            onWallpaperChange={(next) => { setWallpaper(next); localStorage.setItem("covechat-wallpaper", next); }}
+          />
         )}
       </div>
       {noticeOpen ? (
