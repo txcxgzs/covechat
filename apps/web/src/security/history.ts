@@ -5,6 +5,18 @@ import {
   type SecureProfile,
 } from "./vault";
 
+export const MAX_HISTORY_ITEMS_PER_CONVERSATION = 1_000;
+
+export function compactConversationHistory(
+  history: LocalHistoryItem[],
+  now = Date.now(),
+): LocalHistoryItem[] {
+  return history
+    .filter((item) => !item.expiresAt || item.expiresAt > now)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-MAX_HISTORY_ITEMS_PER_CONVERSATION);
+}
+
 function normalizedUsername(username: string): string {
   const normalized = username.trim().toLowerCase();
   if (!/^[a-z0-9_]{3,32}$/u.test(normalized)) throw new Error("invalid history username");
@@ -19,7 +31,7 @@ export async function loadConversationHistory(
   const key = normalizedUsername(username);
   const history = state.history?.[key] ?? [];
   const now = Date.now();
-  const active = history.filter((item) => !item.expiresAt || item.expiresAt > now);
+  const active = compactConversationHistory(history, now);
   if (active.length !== history.length && state.history) {
     state.history[key] = active;
     await saveTrustState(profile, state);
@@ -38,8 +50,7 @@ export async function appendConversationHistory(
   const history = state.history[key] ?? [];
   if (!history.some((existing) => existing.id === item.id)) {
     if (!item.expiresAt || item.expiresAt > Date.now()) history.push(item);
-    history.sort((a, b) => a.createdAt - b.createdAt);
-    state.history[key] = history;
+    state.history[key] = compactConversationHistory(history);
     await saveTrustState(profile, state);
   }
 }

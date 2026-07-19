@@ -131,6 +131,22 @@ export type TrustState = {
   version: 1;
   identities: Record<string, TrustedIdentity>;
   history?: Record<string, LocalHistoryItem[]>;
+  pendingAttachmentUploads?: Record<string, PendingAttachmentUpload>;
+};
+
+export type PendingAttachmentUpload = {
+  version: 1;
+  fingerprint: string;
+  objectId: string;
+  fileKey: string;
+  fileName: string;
+  mimeType: string;
+  plaintextSize: number;
+  lastModified: number;
+  chunkCount: number;
+  ciphertextSize: number;
+  expiresAt: number;
+  chunkDigests: Array<string | null>;
 };
 
 export type LocalHistoryItem = {

@@ -1,5 +1,6 @@
 import type {
   AttachmentReference,
+  AttachmentUploadStatus,
   AuthSession,
 } from "@covechat/protocol";
 import initCrypto, {
@@ -12,8 +13,15 @@ import {
   finalizeAttachment,
   loadAttachmentChunk,
   loadAttachmentManifest,
+  loadAttachmentUploadStatus,
   uploadAttachmentChunk,
 } from "./api";
+import {
+  loadTrustState,
+  saveTrustState,
+  type PendingAttachmentUpload,
+  type SecureProfile,
+} from "./vault";
 
 export const ATTACHMENT_CHUNK_SIZE = 1024 * 1024;
 export const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024;
@@ -45,6 +53,66 @@ async function digest(value: string): Promise<string> {
   return toBase64Url(
     new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))),
   );
+}
+
+async function fileFingerprint(file: File): Promise<string> {
+  const contentDigest = toBase64Url(new Uint8Array(
+    await crypto.subtle.digest("SHA-256", await file.arrayBuffer()),
+  ));
+  return digest(JSON.stringify({
+    contentDigest,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    lastModified: file.lastModified,
+  }));
+}
+
+async function savePendingUpload(
+  profile: SecureProfile,
+  upload: PendingAttachmentUpload,
+): Promise<void> {
+  const state = await loadTrustState(profile);
+  state.pendingAttachmentUploads ??= {};
+  state.pendingAttachmentUploads[upload.fingerprint] = upload;
+  await saveTrustState(profile, state);
+}
+
+async function clearPendingUpload(profile: SecureProfile, fingerprint: string): Promise<void> {
+  const state = await loadTrustState(profile);
+  if (!state.pendingAttachmentUploads?.[fingerprint]) return;
+  delete state.pendingAttachmentUploads[fingerprint];
+  await saveTrustState(profile, state);
+}
+
+export function reconcileAttachmentUpload(
+  upload: PendingAttachmentUpload,
+  status: AttachmentUploadStatus,
+): Map<number, string> {
+  if (
+    status.protocolVersion !== 1
+    || status.objectId !== upload.objectId
+    || status.chunkCount !== upload.chunkCount
+    || status.ciphertextSize !== upload.ciphertextSize
+    || status.expiresAt !== upload.expiresAt
+  ) {
+    throw new Error("attachment upload state mismatch");
+  }
+  const received = new Map<number, string>();
+  for (const chunk of status.receivedChunks) {
+    if (
+      !Number.isInteger(chunk.chunkIndex)
+      || chunk.chunkIndex < 0
+      || chunk.chunkIndex >= upload.chunkCount
+      || !chunk.ciphertextDigest
+      || received.has(chunk.chunkIndex)
+      || upload.chunkDigests[chunk.chunkIndex] !== chunk.ciphertextDigest
+    ) {
+      throw new Error("attachment resume digest mismatch");
+    }
+    received.set(chunk.chunkIndex, chunk.ciphertextDigest);
+  }
+  return received;
 }
 
 function encodedBlobLength(plaintextLength: number): number {
@@ -99,6 +167,7 @@ async function uploadChunkWithRetry(
 
 export async function encryptAndUploadAttachment(
   file: File,
+  profile: SecureProfile,
   session: AuthSession,
   expiresAt = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
   onProgress?: (progress: UploadProgress) => void,
@@ -111,9 +180,7 @@ export async function encryptAndUploadAttachment(
     throw new Error(`attachment exceeds quota: ${file.size} > ${MAX_ATTACHMENT_SIZE}`);
   }
   await ensureCrypto();
-  const objectId = crypto.randomUUID();
-  const objectContext = toBase64Url(encoder.encode(objectId));
-  const fileKey = wasm_generate_attachment_key();
+  const fingerprint = await fileFingerprint(file);
   const chunkCount = Math.ceil(file.size / ATTACHMENT_CHUNK_SIZE);
   let ciphertextSize = 0;
   for (let offset = 0; offset < file.size; offset += ATTACHMENT_CHUNK_SIZE) {
@@ -121,26 +188,79 @@ export async function encryptAndUploadAttachment(
       Math.min(ATTACHMENT_CHUNK_SIZE, file.size - offset),
     );
   }
-  await createAttachmentObject(
-    { objectId, chunkCount, ciphertextSize, expiresAt },
-    session,
+  const trust = await loadTrustState(profile);
+  let upload = trust.pendingAttachmentUploads?.[fingerprint];
+  if (
+    upload
+    && (
+      upload.version !== 1
+      || upload.plaintextSize !== file.size
+      || upload.chunkCount !== chunkCount
+      || upload.ciphertextSize !== ciphertextSize
+      || upload.expiresAt <= Math.floor(Date.now() / 1000)
+    )
+  ) {
+    await clearPendingUpload(profile, fingerprint);
+    upload = undefined;
+  }
+  if (!upload) {
+    upload = {
+      version: 1,
+      fingerprint,
+      objectId: crypto.randomUUID(),
+      fileKey: wasm_generate_attachment_key(),
+      fileName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      plaintextSize: file.size,
+      lastModified: file.lastModified,
+      chunkCount,
+      ciphertextSize,
+      expiresAt,
+      chunkDigests: Array<string | null>(chunkCount).fill(null),
+    };
+    await savePendingUpload(profile, upload);
+    await createAttachmentObject(
+      { objectId: upload.objectId, chunkCount, ciphertextSize, expiresAt },
+      session,
+    );
+  }
+  const objectId = upload.objectId;
+  const objectContext = toBase64Url(encoder.encode(objectId));
+  let received = new Map<number, string>();
+  try {
+    const status = await loadAttachmentUploadStatus(objectId, session);
+    received = reconcileAttachmentUpload(upload, status);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.endsWith(": 404")) throw error;
+    await createAttachmentObject(
+      { objectId, chunkCount, ciphertextSize, expiresAt: upload.expiresAt },
+      session,
+    );
+  }
+  const chunkPlaintextSize = (index: number) => Math.min(
+    ATTACHMENT_CHUNK_SIZE,
+    file.size - index * ATTACHMENT_CHUNK_SIZE,
   );
-  const chunkDigests: string[] = [];
-  let uploadedBytes = 0;
-  // 首次进度回调：0 块已上传。
-  onProgress?.({ uploadedChunks: 0, chunkCount, uploadedBytes: 0, totalBytes: file.size });
+  let uploadedBytes = [...received.keys()].reduce(
+    (total, index) => total + chunkPlaintextSize(index),
+    0,
+  );
+  onProgress?.({ uploadedChunks: received.size, chunkCount, uploadedBytes, totalBytes: file.size });
   for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    if (received.has(chunkIndex)) continue;
     const start = chunkIndex * ATTACHMENT_CHUNK_SIZE;
     const plaintext = new Uint8Array(
       await file.slice(start, Math.min(file.size, start + ATTACHMENT_CHUNK_SIZE)).arrayBuffer(),
     );
     const ciphertext = wasm_encrypt_attachment_chunk(
-      fileKey,
+      upload.fileKey,
       objectContext,
       chunkIndex,
       toBase64Url(plaintext),
     );
     const ciphertextDigest = await digest(ciphertext);
+    upload.chunkDigests[chunkIndex] = ciphertextDigest;
+    await savePendingUpload(profile, upload);
     await uploadChunkWithRetry(
       objectId,
       chunkIndex,
@@ -148,23 +268,29 @@ export async function encryptAndUploadAttachment(
       ciphertextDigest,
       session,
     );
-    chunkDigests.push(ciphertextDigest);
     uploadedBytes += plaintext.length;
-    onProgress?.({ uploadedChunks: chunkIndex + 1, chunkCount, uploadedBytes, totalBytes: file.size });
+    received.set(chunkIndex, ciphertextDigest);
+    onProgress?.({ uploadedChunks: received.size, chunkCount, uploadedBytes, totalBytes: file.size });
   }
   await finalizeAttachment(objectId, session);
-  return {
+  const chunkDigests = upload.chunkDigests.map((value) => {
+    if (!value) throw new Error("attachment upload digest missing");
+    return value;
+  });
+  const reference: AttachmentReference = {
     protocolVersion: 1,
     objectId,
     chunkCount,
     chunkDigests,
     ciphertextSize,
     expiresAt,
-    fileKey,
-    fileName: file.name,
-    mimeType: file.type || "application/octet-stream",
+    fileKey: upload.fileKey,
+    fileName: upload.fileName,
+    mimeType: upload.mimeType,
     plaintextSize: file.size,
   };
+  await clearPendingUpload(profile, fingerprint);
+  return reference;
 }
 
 export async function downloadAndDecryptAttachment(

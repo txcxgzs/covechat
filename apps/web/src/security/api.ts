@@ -422,6 +422,17 @@ export async function createAttachmentObject(
   if (!response.ok) throw new Error(`attachment create failed: ${response.status}`);
 }
 
+export async function loadAttachmentUploadStatus(
+  objectId: string,
+  session: AuthSession,
+): Promise<import("@covechat/protocol").AttachmentUploadStatus> {
+  const response = await fetch(`/api/v1/attachments/${objectId}/upload-status`, {
+    headers: authenticatedHeaders(session),
+  });
+  if (!response.ok) throw new Error(`attachment upload status failed: ${response.status}`);
+  return response.json() as Promise<import("@covechat/protocol").AttachmentUploadStatus>;
+}
+
 export async function uploadAttachmentChunk(
   objectId: string,
   chunkIndex: number,

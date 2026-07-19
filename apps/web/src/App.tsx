@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import type { Conversation, Message } from "./data";
 import { copy, detectLocale, type Locale, type Translate } from "./i18n";
+import { PWA_APPLY_UPDATE_EVENT, PWA_UPDATE_READY_EVENT } from "./pwa-updates";
 import { SecurityGate } from "./security/SecurityGate";
 import { saveMlsState, type SecureProfile } from "./security/vault";
 import type { AttachmentReference, AuthSession, DeviceRecord } from "@covechat/protocol";
@@ -386,7 +387,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
     setUploadProgress({ uploadedChunks: 0, chunkCount: Math.ceil(file.size / (1024 * 1024)), uploadedBytes: 0, totalBytes: file.size });
     try {
       const attachmentExpiry = Math.floor(Date.now() / 1000) + (disappearAfter || 30 * 24 * 60 * 60);
-      const reference = await encryptAndUploadAttachment(file, session, attachmentExpiry, (progress) => {
+      const reference = await encryptAndUploadAttachment(file, profile, session, attachmentExpiry, (progress) => {
         setUploadProgress(progress);
       });
       await sendEncryptedAttachment(profile, session, recipient, reference, disappearAfter || undefined);
@@ -941,6 +942,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
     () => window.matchMedia("(min-width: 1161px)").matches,
   );
   const [noticeOpen, setNoticeOpen] = useState(true);
+  const [updateReady, setUpdateReady] = useState(false);
   const [activeView, setActiveView] = useState<"messages" | "groups">("messages");
   const [recipient, setRecipient] = useState("");
   const [lastReceivedText, setLastReceivedText] = useState<string>();
@@ -955,6 +957,11 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
       ? "CoveChat — 实验性安全软件"
       : "CoveChat — Experimental security software";
   }, [locale]);
+  useEffect(() => {
+    const showUpdate = () => setUpdateReady(true);
+    window.addEventListener(PWA_UPDATE_READY_EVENT, showUpdate);
+    return () => window.removeEventListener(PWA_UPDATE_READY_EVENT, showUpdate);
+  }, []);
   return (
     <div className="app">
       <div className={detailsOpen ? "workspace security-open" : "workspace"}>
@@ -993,6 +1000,14 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
           <div><strong>{t("experimentalPreview")}</strong><span>{t("notAudited")}</span></div>
           <a href="/security">{t("readSecurityModel")}</a>
           <button className="icon-button" onClick={() => setNoticeOpen(false)} aria-label={t("dismissNotice")}><X /></button>
+        </aside>
+      ) : null}
+      {updateReady ? (
+        <aside className="preview-notice update-notice" role="status">
+          <ShieldCheck />
+          <div><strong>{t("securityUpdateReady")}</strong><span>{t("securityUpdateBody")}</span></div>
+          <button className="update-action" onClick={() => window.dispatchEvent(new Event(PWA_APPLY_UPDATE_EVENT))}>{t("reloadNow")}</button>
+          <button className="icon-button" onClick={() => setUpdateReady(false)} aria-label={t("later")}><X /></button>
         </aside>
       ) : null}
     </div>

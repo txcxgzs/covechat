@@ -283,6 +283,8 @@ body { overflow: hidden; background: #eef3f6; }
 .security-person { background: linear-gradient(180deg, #f4fbfb, #fff); }
 .security-section { background: #fff; }
 .preview-notice { position: fixed; right: 18px; bottom: 16px; width: min(440px, calc(100vw - 36px)); min-height: 58px; border: 1px solid #efd7cf; border-radius: 14px; box-shadow: 0 12px 38px #102b4624; z-index: 8; animation: notice-in 320ms var(--motion-spring) both; }
+.update-notice { bottom: 88px; color: #0b716f; background: #f2fbfa; border-color: #bde3df; }
+.update-notice .update-action { border: 0; border-radius: 10px; padding: 9px 12px; background: var(--teal); color: white; font-weight: 750; white-space: nowrap; }
 .group-workspace { grid-column: 2 / -1; }
 @keyframes message-in { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
 @keyframes check-in { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }

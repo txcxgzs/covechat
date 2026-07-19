@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
     react(),
     VitePWA({
       registerType: "prompt",
-      injectRegister: "auto",
+      injectRegister: false,
       manifest: {
         name: "CoveChat",
         short_name: "CoveChat",

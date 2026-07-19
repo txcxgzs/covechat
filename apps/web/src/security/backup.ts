@@ -43,10 +43,11 @@ export async function createEncryptedBackup(
   previous?: EncryptedBackup,
 ): Promise<EncryptedBackup> {
   await ensureCrypto();
+  const { pendingAttachmentUploads: _deviceLocalUploads, ...portableTrustState } = await loadTrustState(profile);
   const payload = {
     version: 2,
     profile,
-    trustState: await loadTrustState(profile),
+    trustState: portableTrustState,
   };
   const plaintext = toBase64Url(encoder.encode(JSON.stringify(payload)));
   const ciphertext = wasm_encrypt_backup(
@@ -97,14 +98,24 @@ export async function decryptBackup(
 }
 
 let pendingSync: Promise<void> = Promise.resolve();
+const BACKUP_CONFLICT_RETRIES = 3;
 
 export function syncEncryptedBackup(
   profile: SecureProfile,
   session: AuthSession,
 ): Promise<void> {
   pendingSync = pendingSync.catch(() => undefined).then(async () => {
-    const previous = await loadLatestBackup(session);
-    await uploadBackup(await createEncryptedBackup(profile, previous ?? undefined), session);
+    for (let attempt = 0; attempt <= BACKUP_CONFLICT_RETRIES; attempt += 1) {
+      const previous = await loadLatestBackup(session);
+      try {
+        await uploadBackup(await createEncryptedBackup(profile, previous ?? undefined), session);
+        return;
+      } catch (error) {
+        const conflict = error instanceof Error && error.message.endsWith(": 409");
+        if (!conflict || attempt === BACKUP_CONFLICT_RETRIES) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100 * (2 ** attempt)));
+      }
+    }
   });
   return pendingSync;
 }

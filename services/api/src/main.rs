@@ -321,6 +321,25 @@ struct AttachmentManifest {
     expires_at: u64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachmentUploadStatus {
+    protocol_version: u8,
+    object_id: Uuid,
+    chunk_count: u32,
+    ciphertext_size: u64,
+    expires_at: u64,
+    finalized: bool,
+    received_chunks: Vec<ReceivedAttachmentChunk>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReceivedAttachmentChunk {
+    chunk_index: u32,
+    ciphertext_digest: String,
+}
+
 #[tokio::main]
 async fn main() {
     if env::args().any(|argument| argument == "--healthcheck") {
@@ -464,6 +483,10 @@ fn router(state: AppState) -> Router {
         .route(
             "/v1/attachments/{object_id}",
             get(read_attachment_manifest).delete(delete_attachment),
+        )
+        .route(
+            "/v1/attachments/{object_id}/upload-status",
+            get(read_attachment_upload_status),
         )
         .route(
             "/v1/attachments/{object_id}/chunks/{chunk_index}",
@@ -1428,6 +1451,47 @@ async fn read_attachment_manifest(
     )
 }
 
+async fn read_attachment_upload_status(
+    State(state): State<AppState>,
+    Path(object_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let mut store = state.inner.lock().await;
+    let Some(device_id) = authenticated_device(&headers, &mut store) else {
+        return (StatusCode::UNAUTHORIZED, Json(None));
+    };
+    let Some(object) = store.attachments.get(&object_id) else {
+        return (StatusCode::NOT_FOUND, Json(None));
+    };
+    if object.owner_device_id != device_id {
+        return (StatusCode::FORBIDDEN, Json(None));
+    }
+    if object.expires_at <= unix_now() {
+        return (StatusCode::NOT_FOUND, Json(None));
+    }
+    let mut received_chunks = object
+        .chunks
+        .iter()
+        .map(|(chunk_index, chunk)| ReceivedAttachmentChunk {
+            chunk_index: *chunk_index,
+            ciphertext_digest: chunk.ciphertext_digest.clone(),
+        })
+        .collect::<Vec<_>>();
+    received_chunks.sort_by_key(|chunk| chunk.chunk_index);
+    (
+        StatusCode::OK,
+        Json(Some(AttachmentUploadStatus {
+            protocol_version: PROTOCOL_VERSION,
+            object_id,
+            chunk_count: object.chunk_count,
+            ciphertext_size: object.ciphertext_size,
+            expires_at: object.expires_at,
+            finalized: object.finalized,
+            received_chunks,
+        })),
+    )
+}
+
 async fn read_attachment_chunk(
     State(state): State<AppState>,
     Path((object_id, chunk_index)): Path<(Uuid, u32)>,
@@ -2126,6 +2190,20 @@ mod tests {
             )
             .await,
             StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            read_attachment_upload_status(State(state.clone()), Path(object_id), headers.clone(),)
+                .await
+                .into_response()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            read_attachment_upload_status(State(state.clone()), Path(object_id), HeaderMap::new(),)
+                .await
+                .into_response()
+                .status(),
+            StatusCode::UNAUTHORIZED
         );
         assert_eq!(
             finalize_attachment(State(state), Path(object_id), headers).await,

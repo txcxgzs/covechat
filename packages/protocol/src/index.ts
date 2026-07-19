@@ -61,6 +61,16 @@ export type EncryptedAttachment = {
   expiresAt: number;
 };
 
+export type AttachmentUploadStatus = {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  objectId: string;
+  chunkCount: number;
+  ciphertextSize: number;
+  expiresAt: number;
+  finalized: boolean;
+  receivedChunks: Array<{ chunkIndex: number; ciphertextDigest: string }>;
+};
+
 export type AttachmentReference = EncryptedAttachment & {
   fileKey: string;
   fileName: string;
