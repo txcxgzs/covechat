@@ -228,6 +228,8 @@ gh run list --repo txcxgzs/covechat --limit 3
 
 ## 7. 对话追加记录
 
+- **2026-07-19（接手复核）**：用户要求继续推进并做好 Telegram 风格动画。已核对远端 `8b3ddd5` CI 全绿；完成主聊天壳第一轮视觉与动画、桌面/390px 浏览器验证，并修复会话过滤依赖和安全抽屉聊天对象展示。安全复核确认“所有成员可邀请”和“退出群组”原实现不可信：现暂时强制管理员成员变更、拒绝已知非管理员 commit，并将按钮明确改为“在此设备隐藏群组”。真正的 MLS 策略同步、安全自助退群和附件跨刷新续传仍未完成，禁止在文档中写成已完成。
+
 - **2026-07-18（第 1 轮）**：首次接手。用户要求阅读项目、查看进度文档、准备接手开发。已确认工作区干净，下一步从续作清单第 1 项（补测试）开始。
 - **2026-07-18（第 2 轮）**：用户说"推进开发"。按续作清单第 1 项补测试：
   - 服务端 `services/api/src/main.rs` 新增 5 个测试（举报/拉黑/备份读取/恢复会话读备份/过期处理）+ 3 个辅助函数
@@ -305,3 +307,12 @@ gh run list --repo txcxgzs/covechat --limit 3
   - 本机自检全绿：node --check exit 0 / npm run typecheck 通过（package.json 改动未影响类型）
   - 剩余：需启动 dev server + 后端 + 可选 Redis 后跑 `npm run test:e2e:origin` 验证真实行为
   - 修改未提交，待用户确认后 git commit + push
+- **2026-07-18（第 11 轮）**：用户说"ok"→ 本机启动 dev server 跑 E2E 验证第 10 轮的 origin-rate-limit.mjs：
+  - 启动后端 cargo run（DATABASE_URL="" 走 ephemeral 模式）+ 前端 vite dev server（在 apps/web 目录，设 COVECHAT_WEB_HOST=127.0.0.1 走 IPv4）
+  - 遇到的问题 1：旧 vite 进程（PID 20200）启动方式不对（命令行 `vite.js 127.0.0.1` 把 127.0.0.1 当 root 目录），导致监听 IPv6 ::1 且 /api 代理不工作（/api/health 返回 404）→ 杀掉重启在 apps/web 目录正确启动后解决
+  - 遇到的问题 2：残留 covechat-api.exe 进程（PID 38164）占用 exe 文件导致 cargo run 编译失败（`failed to remove file ... 拒绝访问`）→ 杀掉残留进程后解决
+  - 第一轮（开发模式，ALLOWED_ORIGINS 未设）：测试 2 pass（收到 422，开发模式放行到 handler，body 无效返回 422 Unprocessable Entity），测试 1/3/4 skip
+  - 第二轮（ALLOWED_ORIGINS=http://127.0.0.1:5173，后端日志确认 "Origin enforcement enabled"）：测试 1 pass（收到 403，非法 Origin https://evil.example.com 被中间件拒绝），测试 4 pass（收到 403，WebSocket 非法 Origin 被拒绝升级），测试 2/3 skip
+  - 合计 3/4 测试本机验证通过（测试 1/2/4），测试 3 需 Redis 才能跑（本机无 Redis）
+  - 验证后清理：停止后端 + 前端 + 杀残留 covechat-api 进程，8080/5173 端口释放
+  - 无代码改动（纯验证），无需提交

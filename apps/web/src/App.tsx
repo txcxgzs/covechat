@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BellOff, CheckCheck, CircleHelp, FileText, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Paperclip, Plus, Search, Send,
@@ -117,7 +117,7 @@ function ConversationList({ historyRevision, locale, onSelect, profile, recipien
     return normalized
       ? conversations.filter((item) => `${item.name} ${item.preview}`.toLowerCase().includes(normalized))
       : conversations;
-  }, [query]);
+  }, [conversations, query]);
 
   return (
     <aside className="conversations">
@@ -754,6 +754,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
                         type="radio"
                         name={`invite-policy-${selected.groupId}`}
                         checked={(selected.invitePolicy ?? "admins") === "anyone"}
+                        disabled
                         onChange={() => void changeInvitePolicy("anyone")}
                       />
                       {t("invitePolicyAnyone")}
@@ -871,8 +872,8 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
     <aside className={open ? "security-panel open" : "security-panel"} aria-label="Conversation security">
       <button className="close-details icon-button" onClick={onClose} aria-label={t("closeSecurityDetails")}><X /></button>
       <div className="security-person">
-        <span className="avatar avatar-large">{profile.username.slice(0, 2).toUpperCase()}</span>
-        <h2>{profile.username}</h2>
+        <span className="avatar avatar-large">{(recipient || "@").slice(0, 2).toUpperCase()}</span>
+        <h2>{recipient || t("newConversation")}</h2>
         <span><LockKeyhole /> {t("endToEndEncrypted")}</span>
       </div>
       <section className="security-section">
@@ -944,6 +945,9 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   const [recipient, setRecipient] = useState("");
   const [lastReceivedText, setLastReceivedText] = useState<string>();
   const [historyRevision, setHistoryRevision] = useState(0);
+  const handleHistoryChange = useCallback(() => {
+    setHistoryRevision((current) => current + 1);
+  }, []);
   useEffect(() => {
     localStorage.setItem("covechat.locale", locale);
     document.documentElement.lang = locale;
@@ -953,7 +957,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   }, [locale]);
   return (
     <div className="app">
-      <div className="workspace">
+      <div className={detailsOpen ? "workspace security-open" : "workspace"}>
         <Navigation
           activeView={activeView}
           locale={locale}
@@ -973,7 +977,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
               session={session}
               onRecipientChange={setRecipient}
               onReceivedText={setLastReceivedText}
-              onHistoryChange={() => setHistoryRevision((current) => current + 1)}
+              onHistoryChange={handleHistoryChange}
               onDetails={() => setDetailsOpen(true)}
               t={t}
             />

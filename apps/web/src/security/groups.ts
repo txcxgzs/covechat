@@ -156,6 +156,15 @@ export function isGroupAdmin(profile: SecureProfile, groupId: string): boolean {
   return admins.includes(profile.deviceId);
 }
 
+export function isAuthorizedGroupCommit(
+  profile: SecureProfile,
+  groupId: string,
+  senderDeviceId: string,
+): boolean {
+  const metadata = groups(profile).find((group) => group.groupId === groupId);
+  return Boolean(metadata && (metadata.adminDeviceIds ?? []).includes(senderDeviceId));
+}
+
 /// 切换群邀请策略。仅管理员可调用；非管理员调用抛错。
 /// anyone=所有成员可邀请；admins=仅管理员可邀请。
 export async function setGroupInvitePolicy(
@@ -168,6 +177,9 @@ export async function setGroupInvitePolicy(
   if (!metadata) throw new Error("group not found");
   if (!isGroupAdmin(profile, groupId)) {
     throw new Error("only admins can change invite policy");
+  }
+  if (policy !== "admins") {
+    throw new Error("member invitations remain admin-only until authenticated group policy sync is implemented");
   }
   metadata.invitePolicy = policy;
   await saveMlsState(profile);
@@ -244,7 +256,7 @@ export async function addGroupMember(
   const metadata = groups(profile).find((group) => group.groupId === groupId);
   if (!metadata) throw new Error("group not found");
   // 邀请策略校验：admins 策略下，非管理员拒绝邀请。
-  if ((metadata.invitePolicy ?? "admins") === "admins" && !isGroupAdmin(profile, groupId)) {
+  if (!isGroupAdmin(profile, groupId)) {
     throw new Error("only admins can invite members");
   }
   const directory = await lookupDirectory(username.trim().toLowerCase(), session);
@@ -381,7 +393,11 @@ export async function receiveEncryptedGroupMessages(
         )) as MlsGroupResult;
         if (joined.groupId !== wrapper.groupId) throw new Error("MLS group id mismatch");
         profile.mls.state = joined.state;
-        updateMetadata(profile, joined, wrapper.name, envelope.conversationId);
+        const metadata = updateMetadata(profile, joined, wrapper.name, envelope.conversationId);
+        // The Welcome sender bootstraps the coordinator identity. Subsequent
+        // membership commits are accepted only from this authenticated device.
+        metadata.adminDeviceIds = [envelope.senderDeviceId];
+        metadata.invitePolicy = "admins";
         const refreshed = JSON.parse(wasm_mls_refresh_key_package(
           JSON.stringify(profile.mls.state),
         )) as { state: Record<string, unknown>; keyPackage: string };
@@ -392,6 +408,12 @@ export async function receiveEncryptedGroupMessages(
         await publishSignalPreKeys(profile, session);
         await acknowledgeEnvelope(envelope.envelopeId, session);
         continue;
+      }
+      if (
+        wrapper.kind === "commit"
+        && !isAuthorizedGroupCommit(profile, wrapper.groupId, envelope.senderDeviceId)
+      ) {
+        throw new Error("rejected MLS membership commit from a non-admin device");
       }
       const processed = JSON.parse(wasm_mls_process(
         JSON.stringify(profile.mls.state),
