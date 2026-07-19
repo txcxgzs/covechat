@@ -1,6 +1,6 @@
 import { FormEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BellOff, CheckCheck, CheckCircle2, CircleHelp, Copy as CopyIcon, FileText, FlaskConical, Image,
+  BellOff, Check, CheckCheck, CheckCircle2, CircleHelp, Copy as CopyIcon, FileText, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Palette, Paperclip, Plus, Search, Send,
   Languages, Reply, Settings, ShieldCheck, Smile, Sparkles, Trash2, UserRound, UsersRound, Volume2, VolumeX, X
 } from "lucide-react";
@@ -23,6 +23,7 @@ import {
   appendConversationHistory,
   listConversationHistories,
   loadConversationHistory,
+  removeConversationHistoryItems,
 } from "./security/history";
 import { syncEncryptedBackup } from "./security/backup";
 import {
@@ -51,6 +52,7 @@ import {
 import { playUiSound, setUiSoundsEnabled, uiSoundsEnabled } from "./ui-feedback";
 import { createReplyReference, type ReplyReference } from "./security/message-content";
 import { installUiRipple } from "./ui-ripple";
+import { Button, IconButton } from "./ui-controls";
 
 /// 将字节数格式化为人类可读的 KB/MB 字符串。
 /// 用于附件上传进度显示。1024 进制，保留 1 位小数（< 1KB 时显示整数）。
@@ -62,6 +64,18 @@ function formatBytes(bytes: number): string {
 
 type AppView = "messages" | "groups" | "settings";
 type WallpaperStyle = "cove" | "plain" | "midnight";
+const NOOP_SELECT_MESSAGE = () => undefined;
+
+function withViewTransition(update: () => void) {
+  const transitionDocument = document as Document & {
+    startViewTransition?: (callback: () => void) => { finished: Promise<void> };
+  };
+  if (transitionDocument.startViewTransition && !document.querySelector(".motion-disabled")) {
+    transitionDocument.startViewTransition(update);
+  } else {
+    update();
+  }
+}
 
 function Navigation({ locale, t, onLocaleChange, profileName, activeView, onViewChange, soundEnabled, onSoundToggle }: {
   locale: Locale;
@@ -138,7 +152,7 @@ function ConversationList({ historyRevision, locale, onSelect, profile, recipien
     <aside className="conversations">
       <div className="section-heading">
         <h1>{t("messages")}</h1>
-        <button className="icon-button" aria-label={t("newConversation")} onClick={() => onSelect("")}><Plus /></button>
+        <IconButton aria-label={t("newConversation")} onClick={() => onSelect("")}><Plus /></IconButton>
       </div>
       <label className="search">
         <Search aria-hidden="true" />
@@ -160,15 +174,16 @@ function ConversationList({ historyRevision, locale, onSelect, profile, recipien
   );
 }
 
-function ChatHeader({ onDetails, recipient, onRecipientChange, t }: {
+function ChatHeader({ onDetails, onMenu, recipient, onRecipientChange, t }: {
   onDetails: () => void;
+  onMenu: () => void;
   recipient: string;
   onRecipientChange: (value: string) => void;
   t: Translate;
 }) {
   return (
     <header className="chat-header">
-      <button className="mobile-menu icon-button" aria-label={t("openNavigation")}><Menu /></button>
+      <IconButton className="mobile-menu" aria-label={t("openNavigation")} onClick={onMenu}><Menu /></IconButton>
       <span className="avatar">{recipient.slice(0, 2).toUpperCase() || "@"}</span>
       <div className="chat-title">
         <input
@@ -180,9 +195,9 @@ function ChatHeader({ onDetails, recipient, onRecipientChange, t }: {
         <span><LockKeyhole /> {t("endToEndEncrypted")}</span>
       </div>
       <div className="header-actions">
-        <button className="icon-button" aria-label={t("searchConversation")}><Search /></button>
-        <button className="icon-button" aria-label={t("muteConversation")}><BellOff /></button>
-        <button className="icon-button" aria-label={t("showSecurityDetails")} onClick={onDetails}><CircleHelp /></button>
+        <IconButton aria-label={t("searchConversation")}><Search /></IconButton>
+        <IconButton aria-label={t("muteConversation")}><BellOff /></IconButton>
+        <IconButton aria-label={t("showSecurityDetails")} onClick={onDetails}><CircleHelp /></IconButton>
       </div>
     </header>
   );
@@ -250,7 +265,7 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
         <div className="reply-preview">
           <Reply />
           <span><strong>{t("reply")}</strong><small>{replyTo.text}</small></span>
-          <button type="button" className="icon-button" onClick={onCancelReply}><X /></button>
+          <IconButton type="button" onClick={onCancelReply}><X /></IconButton>
         </div>
       ) : null}
       <textarea ref={textInput} aria-label={t("messageMaya")} placeholder={t("messageMaya")} value={draft}
@@ -273,13 +288,13 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
             if (file) onAttachment(file);
             event.target.value = "";
           }} />
-          <button type="button" className="icon-button" aria-label={t("attachFile")} onClick={() => fileInput.current?.click()}><Paperclip /></button>
-          <button type="button" className="icon-button" aria-label={t("attachImage")} onClick={() => imageInput.current?.click()}><Image /></button>
-          <button type="button" className="icon-button" aria-label={t("insertDocument")} onClick={() => fileInput.current?.click()}><FileText /></button>
+          <IconButton type="button" aria-label={t("attachFile")} onClick={() => fileInput.current?.click()}><Paperclip /></IconButton>
+          <IconButton type="button" aria-label={t("attachImage")} onClick={() => imageInput.current?.click()}><Image /></IconButton>
+          <IconButton type="button" aria-label={t("insertDocument")} onClick={() => fileInput.current?.click()}><FileText /></IconButton>
         </div>
         <div>
-          <button type="button" className={`icon-button ${emojiOpen ? "active" : ""}`} aria-label={t("chooseEmoji")} aria-expanded={emojiOpen} onPointerDown={(event) => event.stopPropagation()} onClick={() => { playUiSound("open"); setEmojiOpen((open) => !open); }}><Smile /></button>
-          <button className="send" aria-label={t("sendMessage")} disabled={!draft.trim()}><Send /></button>
+          <IconButton type="button" className={emojiOpen ? "active" : ""} aria-label={t("chooseEmoji")} aria-expanded={emojiOpen} onPointerDown={(event) => event.stopPropagation()} onClick={() => { playUiSound("open"); setEmojiOpen((open) => !open); }}><Smile /></IconButton>
+          <Button className="send" aria-label={t("sendMessage")} disabled={!draft.trim()} icon={<Send />} />
         </div>
       </div>
       {emojiOpen ? <EmojiPicker label={t("chooseEmoji")} onPick={insertEmoji} /> : null}
@@ -287,13 +302,15 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
   );
 }
 
-function InteractiveMessage({ locale, message, onReply }: {
+function InteractiveMessage({ locale, message, onReply, onSelect = NOOP_SELECT_MESSAGE, selected = false, selectionMode = false }: {
   locale: Locale;
   message: Message;
   onReply: (message: Message) => void;
+  onSelect?: (messageId: string) => void;
+  selected?: boolean;
+  selectionMode?: boolean;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | undefined>(undefined);
-  const [selected, setSelected] = useState(false);
   const [swipeOffset, setSwipeOffset] = useState(0);
   const swipeOffsetRef = useRef(0);
   const pointerStart = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -319,7 +336,11 @@ function InteractiveMessage({ locale, message, onReply }: {
         playUiSound("open");
         setMenu({ x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 170) });
       }}
+      onClick={() => {
+        if (selectionMode) onSelect(message.id);
+      }}
       onPointerDown={(event) => {
+        if (selectionMode) return;
         pointerStart.current = { x: event.clientX, y: event.clientY };
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
@@ -345,6 +366,9 @@ function InteractiveMessage({ locale, message, onReply }: {
       }}
       onPointerCancel={() => { pointerStart.current = undefined; swipeOffsetRef.current = 0; setSwipeOffset(0); }}
     >
+      {selectionMode ? (
+        <span className={`message-selection-check ${selected ? "selected" : ""}`} aria-hidden="true"><Check /></span>
+      ) : null}
       {message.from === "them" ? <span className="avatar avatar-small">MC</span> : null}
       <div className="bubble">
         {message.replyTo ? <blockquote data-reply-id={message.replyTo.messageId}>{message.replyTo.excerpt}</blockquote> : null}
@@ -353,19 +377,20 @@ function InteractiveMessage({ locale, message, onReply }: {
       </div>
       <span className="swipe-reply-indicator" aria-hidden="true"><Reply /></span>
       {menu ? (
-        <div className="message-menu" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()}>
+        <div className="message-menu" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
           <button onClick={() => { onReply(message); setMenu(undefined); }}><Reply />{isChinese ? "回复" : "Reply"}</button>
           <button onClick={() => { void navigator.clipboard.writeText(message.text); playUiSound("success"); setMenu(undefined); }}><CopyIcon />{isChinese ? "复制" : "Copy"}</button>
-          <button onClick={() => { setSelected((value) => !value); setMenu(undefined); }}><CheckCircle2 />{selected ? (isChinese ? "取消选择" : "Unselect") : (isChinese ? "选择" : "Select")}</button>
+          <button onClick={() => { onSelect(message.id); setMenu(undefined); }}><CheckCircle2 />{selected ? (isChinese ? "取消选择" : "Unselect") : (isChinese ? "选择" : "Select")}</button>
         </div>
       ) : null}
     </article>
   );
 }
 
-function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientChange, profile, recipient, session, t }: {
+function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRecipientChange, profile, recipient, session, t }: {
   locale: Locale;
   onDetails: () => void;
+  onMenu: () => void;
   profile: SecureProfile;
   session: AuthSession;
   t: Translate;
@@ -376,6 +401,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [replyTo, setReplyTo] = useState<Message>();
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [attachments, setAttachments] = useState<AttachmentReference[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState("");
   const [disappearAfter, setDisappearAfter] = useState(0);
@@ -389,6 +415,8 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
   // 上传失败时保留待重试的文件；重试成功或取消后清空。
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   useEffect(() => {
+    setSelectedIds(new Set());
+    setReplyTo(undefined);
     if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
       setMessages([]);
       setAttachments([]);
@@ -410,6 +438,32 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
       setAttachments(history.flatMap((item) => item.attachment ? [item.attachment] : []));
     });
   }, [locale, profile, recipient]);
+
+  function toggleMessageSelection(messageId: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }
+
+  async function copySelectedMessages() {
+    const text = messages.filter((message) => selectedIds.has(message.id)).map((message) => message.text).join("\n\n");
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    playUiSound("success");
+    setSelectedIds(new Set());
+  }
+
+  async function deleteSelectedMessages() {
+    if (selectedIds.size === 0) return;
+    await removeConversationHistoryItems(profile, recipient, selectedIds);
+    setMessages((current) => current.filter((message) => !selectedIds.has(message.id)));
+    setSelectedIds(new Set());
+    onHistoryChange();
+    playUiSound("success");
+  }
   useEffect(() => {
     const prune = () => {
       const now = Date.now();
@@ -575,10 +629,25 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
     <main className="chat">
       <ChatHeader
         onDetails={onDetails}
+        onMenu={onMenu}
         onRecipientChange={onRecipientChange}
         recipient={recipient}
         t={t}
       />
+      {selectedIds.size > 0 ? (
+        <div className="selection-toolbar" role="toolbar" aria-label={locale === "zh-CN" ? "消息批量操作" : "Message actions"}>
+          <IconButton aria-label={locale === "zh-CN" ? "取消选择" : "Cancel selection"} onClick={() => setSelectedIds(new Set())}><X /></IconButton>
+          <strong>{locale === "zh-CN" ? `已选择 ${selectedIds.size} 条` : `${selectedIds.size} selected`}</strong>
+          <span />
+          {selectedIds.size === 1 ? <IconButton aria-label={locale === "zh-CN" ? "回复" : "Reply"} onClick={() => {
+            const selectedMessage = messages.find((message) => selectedIds.has(message.id));
+            if (selectedMessage) setReplyTo(selectedMessage);
+            setSelectedIds(new Set());
+          }}><Reply /></IconButton> : null}
+          <IconButton aria-label={locale === "zh-CN" ? "复制" : "Copy"} onClick={() => void copySelectedMessages()}><CopyIcon /></IconButton>
+          <IconButton className="danger" aria-label={locale === "zh-CN" ? "从本设备删除" : "Delete from this device"} onClick={() => void deleteSelectedMessages()}><Trash2 /></IconButton>
+        </div>
+      ) : null}
       <div className="disappearing-control">
         <LockKeyhole />
         <label>
@@ -593,7 +662,15 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
       </div>
       <section className="messages" aria-label="Encrypted conversation" aria-live="polite">
         <div className="date-rule"><span>{t("today")}</span></div>
-        {messages.map((message) => <InteractiveMessage key={message.id} locale={locale} message={message} onReply={setReplyTo} />)}
+        {messages.map((message) => <InteractiveMessage
+          key={message.id}
+          locale={locale}
+          message={message}
+          onReply={setReplyTo}
+          onSelect={toggleMessageSelection}
+          selected={selectedIds.has(message.id)}
+          selectionMode={selectedIds.size > 0}
+        />)}
         {attachments.map((attachment) => (
           <article className="message-row me" key={attachment.objectId}>
             <div className="bubble attachment-bubble">
@@ -643,7 +720,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(undefined)}
         onAttachment={(file) => void uploadAttachment(file)}
-        onSend={(text) => void sendText(text)}
+        onSend={(text, reply) => void sendText(text, reply)}
       />
     </main>
   );
@@ -1158,6 +1235,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   const [noticeOpen, setNoticeOpen] = useState(true);
   const [updateReady, setUpdateReady] = useState(false);
   const [activeView, setActiveView] = useState<AppView>("messages");
+  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [recipient, setRecipient] = useState("");
   const [lastReceivedText, setLastReceivedText] = useState<string>();
   const [historyRevision, setHistoryRevision] = useState(0);
@@ -1185,7 +1263,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   }, []);
   return (
     <div className={`app wallpaper-${wallpaper} ${motionEnabled ? "" : "motion-disabled"}`}>
-      <div className={detailsOpen ? "workspace security-open" : "workspace"}>
+      <div className={`${detailsOpen ? "workspace security-open" : "workspace"} ${mobilePanelOpen ? "mobile-panel-open" : ""}`}>
         <Navigation
           activeView={activeView}
           locale={locale}
@@ -1198,11 +1276,14 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
             setUiSoundsEnabled(next);
           }}
           onLocaleChange={() => { playUiSound("navigate"); setLocale((current) => current === "zh-CN" ? "en" : "zh-CN"); }}
-          onViewChange={setActiveView}
+          onViewChange={(view) => withViewTransition(() => { setActiveView(view); setMobilePanelOpen(false); })}
         />
         {activeView === "messages" ? (
           <>
-            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onSelect={(username) => { playUiSound("navigate"); setRecipient(username); }} profile={profile} recipient={recipient} t={t} />
+            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onSelect={(username) => {
+              playUiSound("navigate");
+              withViewTransition(() => { setRecipient(username); setMobilePanelOpen(false); });
+            }} profile={profile} recipient={recipient} t={t} />
             <Chat
               key={`chat-${locale}`}
               locale={locale}
@@ -1212,9 +1293,11 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
               onRecipientChange={setRecipient}
               onReceivedText={setLastReceivedText}
               onHistoryChange={handleHistoryChange}
+              onMenu={() => { playUiSound("open"); setMobilePanelOpen(true); }}
               onDetails={() => { playUiSound("open"); setDetailsOpen(true); }}
               t={t}
             />
+            {mobilePanelOpen ? <button className="mobile-panel-scrim" aria-label={locale === "zh-CN" ? "关闭菜单" : "Close menu"} onClick={() => setMobilePanelOpen(false)} /> : null}
             <SecurityPanel lastReceivedText={lastReceivedText} open={detailsOpen} onClose={() => { playUiSound("open"); setDetailsOpen(false); }} locale={locale} profile={profile} recipient={recipient} session={session} t={t} />
           </>
         ) : activeView === "groups" ? (

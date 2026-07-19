@@ -55,6 +55,23 @@ export async function appendConversationHistory(
   }
 }
 
+export async function removeConversationHistoryItems(
+  profile: SecureProfile,
+  username: string,
+  messageIds: Iterable<string>,
+): Promise<void> {
+  const ids = new Set(messageIds);
+  if (ids.size === 0) return;
+  const state = await loadTrustState(profile);
+  const key = normalizedUsername(username);
+  const history = state.history?.[key];
+  if (!history) return;
+  const next = history.filter((item) => !ids.has(item.id));
+  if (next.length === history.length) return;
+  state.history![key] = next;
+  await saveTrustState(profile, state);
+}
+
 export async function listConversationHistories(
   profile: SecureProfile,
 ): Promise<Array<{ username: string; latest?: LocalHistoryItem }>> {
