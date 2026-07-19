@@ -11,4 +11,5 @@ target/
 coverage/
 playwright-report/
 test-results/
+backups/
 *.tsbuildinfo

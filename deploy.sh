@@ -6,108 +6,120 @@ cd "$ROOT"
 
 HOST_ADDRESS="127.0.0.1"
 PORT="8088"
+PUBLIC_ORIGIN=""
+SKIP_VERIFY=0
 
 usage() {
   cat <<'EOF'
-Usage: ./deploy.sh [--host 127.0.0.1] [--port 8088]
+用法 / Usage:
+  ./deploy.sh [--domain chat.example.com] [--host 127.0.0.1] [--port 8088] [--skip-verify]
 
-Builds and starts CoveChat with Docker Compose. By default only the local
-loopback address is exposed, ready for an Nginx or Caddy reverse proxy.
+首次部署或重新构建 CoveChat。默认仅监听 127.0.0.1:8088，供 Nginx、Caddy
+或宝塔反向代理。--domain 会自动写入 https:// 域名的 Origin 允许列表。
 EOF
 }
 
 while (($#)); do
   case "$1" in
-    --host)
-      [[ $# -ge 2 ]] || { echo "Missing value for --host" >&2; exit 2; }
-      HOST_ADDRESS="$2"
-      shift 2
-      ;;
-    --port)
-      [[ $# -ge 2 ]] || { echo "Missing value for --port" >&2; exit 2; }
-      PORT="$2"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $1" >&2
-      usage >&2
-      exit 2
-      ;;
+    --domain) [[ $# -ge 2 ]] || exit 2; PUBLIC_ORIGIN="$2"; shift 2 ;;
+    --host) [[ $# -ge 2 ]] || exit 2; HOST_ADDRESS="$2"; shift 2 ;;
+    --port) [[ $# -ge 2 ]] || exit 2; PORT="$2"; shift 2 ;;
+    --skip-verify) SKIP_VERIFY=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "未知参数 / Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 [[ "$PORT" =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || {
-  echo "Port must be an integer between 1 and 65535." >&2
+  echo "端口必须是 1-65535 / Port must be between 1 and 65535." >&2
   exit 2
 }
 [[ "$HOST_ADDRESS" =~ ^[0-9a-fA-F:.]+$ ]] || {
-  echo "Host must be an IP address, not a hostname." >&2
+  echo "--host 必须是 IP 地址 / --host must be an IP address." >&2
   exit 2
 }
+if [[ -n "$PUBLIC_ORIGIN" ]]; then
+  if [[ "$PUBLIC_ORIGIN" != http://* && "$PUBLIC_ORIGIN" != https://* ]]; then
+    PUBLIC_ORIGIN="https://${PUBLIC_ORIGIN}"
+  fi
+  PUBLIC_ORIGIN="${PUBLIC_ORIGIN%/}"
+fi
 
 command -v docker >/dev/null 2>&1 || {
-  echo "Docker was not found. Install Docker Engine with the Compose plugin." >&2
+  echo "未找到 Docker。请先运行 ./install.sh --install-docker，或安装 Docker Engine。" >&2
   exit 1
 }
-docker compose version >/dev/null
+docker compose version >/dev/null 2>&1 || {
+  echo "未找到 Docker Compose 插件。" >&2
+  exit 1
+}
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+  command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1 || {
+    echo "当前用户无权访问 Docker，请配置 docker 组或使用 sudo。" >&2
+    exit 1
+  }
+  DOCKER=(sudo docker)
+fi
 
 random_secret() {
   if command -v openssl >/dev/null 2>&1; then
-    openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n'
+    openssl rand -base64 36 | tr '+/' '-_' | tr -d '=\n'
   else
-    head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'
+    head -c 36 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'
   fi
 }
 
 if [[ ! -f .env ]]; then
   umask 077
-  cat >.env <<EOF
-# CoveChat 部署配置（自动生成，权限 0600）
-# 反向代理上游监听地址（默认只监听本机回环，由宝塔/Nginx/Caddy 反代到公网）
-COVECHAT_HTTP_HOST=$HOST_ADDRESS
-COVECHAT_HTTP_PORT=$PORT
-
-# 基础设施随机强密码（请勿修改，除非同步轮换对应服务凭据）
+  cat > .env <<EOF
+# CoveChat production deployment configuration. Keep this file private.
+COVECHAT_HTTP_HOST=${HOST_ADDRESS}
+COVECHAT_HTTP_PORT=${PORT}
 POSTGRES_PASSWORD=$(random_secret)
 MINIO_ROOT_USER=covechat
 MINIO_ROOT_PASSWORD=$(random_secret)
-
-# 第 6 轮新增：CSRF 纵深防御的 Origin 允许列表（逗号分隔，不含尾斜杠）。
-# 留空 = 开发模式放行所有 Origin（不安全，仅用于本地测试）。
-# 生产部署必须设置为实际公网域名，例如：
-#   ALLOWED_ORIGINS=https://chat.example.com
-#   ALLOWED_ORIGINS=https://chat.example.com,https://chat-backup.example.com
-ALLOWED_ORIGINS=
+ALLOWED_ORIGINS=${PUBLIC_ORIGIN}
 EOF
-  echo "Created .env with random infrastructure passwords."
-  echo ""
-  echo "⚠️  重要：编辑 .env 设置 ALLOWED_ORIGINS 为你的公网域名，"
-  echo "    否则 Origin 校验处于开发模式放行所有请求（不安全）。"
-  echo "    示例：ALLOWED_ORIGINS=https://chat.example.com"
+  chmod 600 .env
+  echo "[OK] 已生成 .env（权限 0600）/ Generated private .env."
 else
-  echo "Using existing .env. Command-line host and port are ignored."
+  echo "[OK] 使用现有 .env；不会覆盖密码、端口或域名配置。"
+  if [[ -n "$PUBLIC_ORIGIN" ]]; then
+    if grep -q '^ALLOWED_ORIGINS=' .env; then
+      sed -i.bak "s|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${PUBLIC_ORIGIN}|" .env
+    else
+      printf '\nALLOWED_ORIGINS=%s\n' "$PUBLIC_ORIGIN" >> .env
+    fi
+    rm -f .env.bak
+  fi
 fi
 
-docker compose --env-file .env -f compose.deploy.yml up -d --build
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
 
-TARGET="http://${HOST_ADDRESS}:${PORT}"
+if [[ -z "${ALLOWED_ORIGINS:-}" ]]; then
+  echo "[WARN] ALLOWED_ORIGINS 为空，只适合本机测试。公网部署请传 --domain。"
+fi
+
+COMPOSE=("${DOCKER[@]}" compose --env-file .env -f compose.deploy.yml)
+echo "[1/3] 拉取基础镜像 / Pulling base images..."
+"${COMPOSE[@]}" pull postgres redis minio
+echo "[2/3] 构建并启动 / Building and starting..."
+"${COMPOSE[@]}" up -d --build --pull always --remove-orphans
+echo "[3/3] 等待健康检查 / Waiting for health checks..."
+
+if ((SKIP_VERIFY == 0)); then
+  ./deploy/verify.sh
+fi
+
 cat <<EOF
 
-CoveChat is starting at: $TARGET
-Reverse proxy upstream: $TARGET
-Status: docker compose --env-file .env -f compose.deploy.yml ps
-Logs:   docker compose --env-file .env -f compose.deploy.yml logs -f
-Stop:   docker compose --env-file .env -f compose.deploy.yml down
-
-部署后请跑验证脚本（推荐传入公网域名）：
-  chmod +x deploy/verify.sh
-  ./deploy/verify.sh --public-url https://chat.example.com
-
-⚠️  如果你还没有编辑 .env 设置 ALLOWED_ORIGINS，请先编辑再重建 API 容器：
-  vi .env  # 设置 ALLOWED_ORIGINS=https://你的域名
-  docker compose --env-file .env -f compose.deploy.yml up -d --force-recreate api
+CoveChat 已启动 / CoveChat is running
+  本机上游 / Upstream: http://${COVECHAT_HTTP_HOST:-127.0.0.1}:${COVECHAT_HTTP_PORT:-8088}
+  状态 / Status: docker compose --env-file .env -f compose.deploy.yml ps
+  日志 / Logs:   docker compose --env-file .env -f compose.deploy.yml logs -f
+  更新 / Update: ./update.sh
 EOF

@@ -1,3 +1,5 @@
+name: covechat
+
 services:
   web:
     build:
@@ -27,9 +29,7 @@ services:
       AWS_SECRET_ACCESS_KEY: "${MINIO_ROOT_PASSWORD}"
       AWS_EC2_METADATA_DISABLED: "true"
       RUST_LOG: covechat_api=info
-      # 第 6 轮新增：CSRF 纵深防御的 Origin 允许列表（逗号分隔）。
-      # 留空 = 开发模式放行所有；生产部署必须设置为实际域名，否则 Origin 校验失效。
-      # 示例：ALLOWED_ORIGINS=https://chat.example.com,https://chat-backup.example.com
+      # Comma-separated exact origins. Required for public deployment.
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-}"
     expose: ["8080"]
     depends_on:
@@ -43,8 +43,8 @@ services:
       test: ["CMD", "/usr/local/bin/covechat-api", "--healthcheck"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 5
+      start_period: 15s
 
   postgres:
     image: postgres:17-alpine
@@ -53,19 +53,25 @@ services:
       POSTGRES_DB: covechat
       POSTGRES_USER: covechat
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
-    volumes: [postgres-data:/var/lib/postgresql/data]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     expose: ["5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U covechat -d covechat"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 12
 
   redis:
     image: redis:8-alpine
     restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     expose: ["6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
@@ -74,9 +80,9 @@ services:
     environment:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER:-covechat}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}"
-    volumes: [minio-data:/data]
+    volumes:
+      - minio-data:/data
     expose: ["9000"]
-
 volumes:
   postgres-data:
   minio-data:

@@ -1,248 +1,217 @@
 # CoveChat
 
-面向国际市场的开源端到端加密聊天项目。默认中文，可一键切换 English。
+CoveChat 是面向国际市场的开源端到端加密聊天项目。首发客户端为可安装 PWA，界面默认中文，可一键切换 English。
 
-> **安全警告：** CoveChat 0.x 是尚未经过独立安全审计的实验性软件。
-> 当前版本可用于部署测试和低风险试用，请勿用于高敏感或高风险通信。
+> **安全警告**：CoveChat `0.x` 尚未经过独立安全审计，只适合部署测试和低风险试用。请勿将当前版本用于高敏感、高风险或人身安全相关通信。
 
-## 当前可用范围
+## 当前能力
 
-- 可安装 React/Vite PWA，中英双语，默认中文
-- 用户名注册、设备身份、恢复码、本地加密保险库
-- 单聊与最多 50 个成员设备的 RFC 9420 MLS 小群
-- 消息邮箱、WebSocket 在线投递和离线密文队列
-- 官方 libsignal 协议核心的 PQXDH、后量子预密钥与逐消息 Ratchet
-- 客户端加密云备份、回滚链和设备恢复
-- 客户端分块加密附件及 S3 兼容对象存储
-- PostgreSQL 持久化、MinIO、Redis 和反向代理一键部署
+- 用户名注册、设备身份、恢复码与本地加密保险库
+- 基于 libsignal 协议核心的 PQXDH、后量子预密钥与逐消息 Ratchet 单聊
+- 基于 RFC 9420/OpenMLS 的 50 人以内加密小群
+- 文本、图片、文件分块加密、离线密文邮箱和 WebSocket 投递
+- 客户端加密云备份、设备恢复、密钥变更提示和安全码验证
+- PostgreSQL、Redis、S3 兼容对象存储和仅暴露单一 Web 端口的 Compose 部署
+- 中英双语、PWA、深色主题及 Telegram 启发的聊天交互动画
 
-暂未完成生产级验收的功能包括：多设备完整交互、举报管理和独立安全审计。
+尚未完成生产级验收：完整多设备互操作、独立密码学审计、管理后台和大规模压力测试。因此项目持续显示 `experimental` 标识。
 
-## Linux 一键部署
+## 最快部署：全新 Linux 服务器
 
-需要安装 Docker Engine 和 Compose 插件：
+支持 Ubuntu/Debian、Rocky/Alma/CentOS 等常见 Linux。推荐至少 2 核 CPU、4 GB 内存、20 GB 可用磁盘。
 
-```bash
-chmod +x deploy.sh
-./deploy.sh
-```
-
-自定义反向代理上游端口：
+### 方式一：服务器已经安装 Docker
 
 ```bash
-./deploy.sh --port 9000
+git clone https://github.com/txcxgzs/covechat.git /opt/covechat
+cd /opt/covechat
+chmod +x install.sh deploy.sh update.sh deploy/verify.sh
+./deploy.sh --domain chat.example.com
 ```
 
-脚本会使用系统安全随机源生成权限受限的 `.env`，构建并启动 Web、API、
-PostgreSQL、Redis 和 MinIO。默认仅在服务器回环地址监听：
+### 方式二：一条命令自动下载并部署
+
+先下载脚本，检查内容后执行：
+
+```bash
+curl -fL https://raw.githubusercontent.com/txcxgzs/covechat/main/install.sh -o /tmp/covechat-install.sh
+less /tmp/covechat-install.sh
+bash /tmp/covechat-install.sh --install-docker --domain chat.example.com
+```
+
+`--install-docker` 会下载并运行 Docker 官方安装脚本；服务器已有 Docker 时请省略。默认安装目录为 `/opt/covechat`，默认仅监听：
 
 ```text
 http://127.0.0.1:8088
 ```
 
-随后将 Nginx、Caddy 或面板反向代理的 HTTP/WebSocket 上游设置为
-`http://127.0.0.1:8088`。不要将 API、PostgreSQL、Redis 或 MinIO
-端口直接暴露到公网。示例见 [Caddy](deploy/Caddyfile.example) 和
-[Nginx](deploy/nginx.reverse-proxy.example.conf) 配置。
-
-### 配置 Origin 允许列表（重要）
-
-`deploy.sh` 生成的 `.env` 默认 `ALLOWED_ORIGINS=` 为空，表示开发模式放行所有
-Origin（不安全）。**生产部署必须**编辑 `.env`，把公网域名填上：
+常用安装参数：
 
 ```bash
-vi .env
-# 修改这一行（多个域名用逗号分隔，不含尾斜杠）：
-# ALLOWED_ORIGINS=https://chat.example.com
+bash /tmp/covechat-install.sh \
+  --dir /www/wwwroot/covechat \
+  --ref main \
+  --domain chat.example.com \
+  --host 127.0.0.1 \
+  --port 9000
 ```
 
-保存后重建 API 容器使配置生效：
+安装器会检查依赖、从 GitHub 下载源码、生成权限为 `0600` 的 `.env` 和随机强密码、配置 Origin、启动五个服务并执行健康检查。
 
-```bash
-docker compose --env-file .env -f compose.deploy.yml up -d --force-recreate api
+## 反向代理与 HTTPS
+
+公网只应暴露 Nginx/Caddy/宝塔提供的 `443`。不要把 API、PostgreSQL、Redis 或 MinIO 端口直接暴露到公网。
+
+反向代理上游：
+
+```text
+http://127.0.0.1:8088
 ```
 
-留空时服务端会打印 `Origin checks are disabled (development mode)` 警告。
+示例配置：[`Nginx`](deploy/nginx.reverse-proxy.example.conf) / [`Caddy`](deploy/Caddyfile.example)。反向代理必须支持 WebSocket：
 
-### 部署后验证（在 Linux 服务器上跑）
+```nginx
+proxy_http_version 1.1;
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection $connection_upgrade;
+proxy_read_timeout 75s;
+proxy_buffering off;
+```
 
-`deploy/verify.sh` 一键验证 8 项：服务状态、PostgreSQL 迁移表、Redis 连通、
-MinIO 健康、API `/health`、Web `/healthz`、反向代理、Origin 校验。
+宝塔面板：新建纯静态站点，配置 SSL/强制 HTTPS，将整站反向代理到 `http://127.0.0.1:8088`，并启用 WebSocket。最后运行：
 
 ```bash
-chmod +x deploy/verify.sh
-
-# 只验证容器内部（不验反代、不验 Origin）
-./deploy/verify.sh
-
-# 同时验证反向代理和 Origin 校验（推荐，传入你的公网域名）
+cd /www/wwwroot/covechat
 ./deploy/verify.sh --public-url https://chat.example.com
 ```
 
-退出码 `0` = 全部通过；`1` = 至少一项失败，按输出排查。
+## 新版本如何更新
 
-### 宝塔面板部署（小白推荐）
+不要使用简单的 `git pull && docker compose up`。使用项目更新器：
 
-如果你用宝塔面板（BT Panel），按以下步骤操作（每一步都要做完）：
-
-1. **登录宝塔面板**：浏览器打开 `http://你的服务器IP:8888`（宝塔默认端口）。
-
-2. **安装 Docker 管理器**：
-   - 左侧菜单 → 软件商店 → 搜索 `Docker管理器` → 点 `安装`。
-   - 等待安装完成（约 1-3 分钟）。安装后左侧菜单会多出 `Docker` 项。
-
-3. **拉取 CoveChat 代码**：
-   - 左侧菜单 → 终端 → 执行：
-     ```bash
-     cd /www/wwwroot
-     git clone https://github.com/txcxgzs/covechat.git
-     cd covechat
-     ```
-   - 如果没装 git：`yum install -y git`（CentOS）或 `apt install -y git`（Ubuntu/Debian）。
-
-4. **首次部署**：
-   - 终端继续执行：
-     ```bash
-     chmod +x deploy.sh
-     ./deploy.sh
-     ```
-   - 脚本会自动生成 `.env`（权限 0600，含随机强密码）并启动 5 个容器。
-
-5. **配置 Origin 允许列表**（关键安全步骤）：
-   - 终端执行 `vi .env`，找到 `ALLOWED_ORIGINS=` 这一行，改成你的域名：
-     ```
-     ALLOWED_ORIGINS=https://chat.你的域名.com
-     ```
-   - 按 `i` 进入插入模式编辑，按 `Esc` 后输入 `:wq` 保存退出。
-   - 重建 API 容器：
-     ```bash
-     docker compose --env-file .env -f compose.deploy.yml up -d --force-recreate api
-     ```
-
-6. **在宝塔配置反向代理**（让公网通过 HTTPS 访问）：
-   - 左侧菜单 → 网站 → 添加站点：
-     - 域名：`chat.你的域名.com`
-     - 根目录：任意（反代不读根目录）
-     - PHP版本：纯静态
-     - 点 `提交`。
-   - 进入站点设置 → 反向代理：
-     - 点 `添加反向代理`：
-       - 代理名称：`covechat`
-       - 目标URL：`http://127.0.0.1:8088`
-       - 发送域名：`$host`
-       - 勾选 `启用代理`，点 `提交`。
-   - 进入站点设置 → SSL：
-     - 选 `Let's Encrypt`，勾选你的域名，点 `申请`。
-     - 申请成功后勾选 `强制HTTPS`。
-   - **WebSocket 支持**：宝塔默认反代配置不含 WebSocket 升级头。进入站点设置 → 配置文件，在 `location /` 块内加三行：
-     ```nginx
-     proxy_http_version 1.1;
-     proxy_set_header X-Forwarded-For $remote_addr;
-     proxy_set_header X-Forwarded-Proto $scheme;
-     proxy_set_header Upgrade $http_upgrade;
-     proxy_set_header Connection "upgrade";
-     ```
-     保存并重启 Nginx。
-
-7. **跑部署验证脚本**：
-   - 终端执行：
-     ```bash
-     cd /www/wwwroot/covechat
-     chmod +x deploy/verify.sh
-     ./deploy/verify.sh --public-url https://chat.你的域名.com
-     ```
-   - 看到 `部署验证全部通过！CoveChat 已就绪。` 即完成。
-
-8. **日常维护命令**（终端执行）：
-   ```bash
-   cd /www/wwwroot/covechat
-   # 查看服务状态
-   docker compose --env-file .env -f compose.deploy.yml ps
-   # 查看实时日志
-   docker compose --env-file .env -f compose.deploy.yml logs -f
-   # 停止服务
-   docker compose --env-file .env -f compose.deploy.yml down
-   # 更新代码并重新部署
-   git pull && ./deploy.sh
-   ```
-
-常见问题：
-
-- 反代后 WebSocket 连不上 → 第 6 步的三个 upgrade 头没加。
-- `verify.sh` 报 `Origin 校验处于开发模式放行所有` → 第 5 步 `.env` 没改或没重建 api 容器。
-- 容器启动失败 → 看 `docker compose logs` 找原因，常见是端口被占用（改 `.env` 里的 `COVECHAT_HTTP_PORT`）。
-
-## Windows 一键部署
-
-安装并启动 Docker Desktop 后，在 PowerShell 中运行：
-
-```powershell
-.\deploy.ps1
+```bash
+cd /opt/covechat
+./update.sh
 ```
 
-自定义端口：
+更新器会：
 
-```powershell
-.\deploy.ps1 -Port 9000
+1. 检查已跟踪文件的本地修改，有修改则停止以避免覆盖。
+2. 在 `backups/` 创建带 UTC 时间戳的 PostgreSQL 备份。
+3. 对目标分支执行 fast-forward-only 更新。
+4. 拉取基础镜像，重新构建 Web/API 并原地更新容器。
+5. 保留 `.env`、PostgreSQL volume 与 MinIO volume。
+6. 等待健康检查并运行 `deploy/verify.sh`。
+
+指定分支或版本标签：
+
+```bash
+./update.sh --ref main
+# 发布标签可用后，例如：./update.sh --ref v0.2.0
 ```
 
-Windows 部署同样需要在 `.env` 中设置 `ALLOWED_ORIGINS`（生产域名），留空 = 开发模式。
+失败时脚本会显示更新前提交。代码可以回退，但数据库迁移不会自动回退：
 
-常用维护命令：
+```bash
+git checkout <更新前提交>
+./deploy.sh
+```
 
-```powershell
+数据库备份位于 `backups/covechat-YYYYmmddTHHMMSSZ.dump`。还应使用服务器快照或异地备份保护 Docker volumes 与 `.env`。
+
+## 日常维护
+
+```bash
+cd /opt/covechat
 docker compose --env-file .env -f compose.deploy.yml ps
-docker compose --env-file .env -f compose.deploy.yml logs -f
+docker compose --env-file .env -f compose.deploy.yml logs -f --tail=200
+./deploy/verify.sh --public-url https://chat.example.com
 docker compose --env-file .env -f compose.deploy.yml down
+./deploy.sh
 ```
+
+不要运行 `docker compose down -v`，除非你明确要永久删除 PostgreSQL 和 MinIO 数据。
+
+## `.env` 关键配置
+
+首次部署自动生成 `.env`，后续部署或更新不会覆盖它。
+
+```dotenv
+COVECHAT_HTTP_HOST=127.0.0.1
+COVECHAT_HTTP_PORT=8088
+POSTGRES_PASSWORD=<自动生成>
+MINIO_ROOT_USER=covechat
+MINIO_ROOT_PASSWORD=<自动生成>
+ALLOWED_ORIGINS=https://chat.example.com
+```
+
+- `COVECHAT_HTTP_HOST` 保持 `127.0.0.1`，只允许本机反向代理访问。
+- `ALLOWED_ORIGINS` 公网部署必须设置为精确 HTTPS Origin，不带末尾 `/`；多个域名用逗号分隔。
+- `.env` 包含基础设施密码，必须保持私密并备份。
+
+修改配置后：
+
+```bash
+docker compose --env-file .env -f compose.deploy.yml up -d --force-recreate
+./deploy/verify.sh
+```
+
+## 部署前必须知道
+
+- 当前版本能进行实验性的端到端加密单聊、小群和附件通信，但不能宣称“媲美 Telegram 的已审计安全性”。
+- 浏览器扩展、恶意软件、截图、键盘记录和完全失陷的终端不在保护范围内。
+- 公网必须使用 HTTPS；恢复码丢失后服务端无法代用户找回。
+- 上线前必须备份 `.env`、PostgreSQL 与 MinIO 数据。
+
+更多安全边界见 [`SECURITY.md`](SECURITY.md) 和 [`威胁模型`](docs/security/threat-model.md)。
 
 ## 本地开发
-
-开发服务默认仅绑定 `127.0.0.1`，端口可以配置：
 
 ```powershell
 .\dev.ps1
 .\dev.ps1 -WebPort 3000 -ApiPort 3001
 ```
 
-反向代理只需指向 Web 地址，例如 `http://127.0.0.1:3000`。
-`/api/*` 和 WebSocket 会由 Vite 转发到本地 API。
+开发服务默认只绑定 `127.0.0.1`。反向代理指向 Web 端口即可，`/api/*` 和 WebSocket 会被转发到 Rust API。
+
+## English quick start
+
+CoveChat is experimental, unaudited end-to-end encrypted chat software. Do not use `0.x` for high-risk communications.
+
+```bash
+git clone https://github.com/txcxgzs/covechat.git /opt/covechat
+cd /opt/covechat
+chmod +x install.sh deploy.sh update.sh deploy/verify.sh
+./deploy.sh --domain chat.example.com
+```
+
+Point your HTTPS/WebSocket reverse proxy to `http://127.0.0.1:8088`. Update without replacing `.env` or Docker volumes:
+
+```bash
+cd /opt/covechat
+./update.sh
+```
+
+The updater refuses dirty tracked files, creates a PostgreSQL backup, fast-forwards the selected ref, rebuilds containers, and runs health checks.
 
 ## 项目结构
 
 - `apps/web`：React/Vite PWA
-- `services/api`：Rust HTTP/WebSocket 投递服务
-- `crates/crypto-core`：Rust/WASM 密码学边界
-- `packages/protocol`：带版本的公共协议类型
-- `docs/security`：威胁模型、密钥生命周期和数据流
+- `services/api`：Rust HTTP/WebSocket 服务
+- `crates/crypto-core`：Rust/WASM 密码学核心
+- `packages/protocol`：公共协议类型
+- `deploy.sh`：已有源码目录的一键部署
+- `install.sh`：全新服务器自动下载与部署
+- `update.sh`：保留配置和数据的安全更新
+- `deploy/verify.sh`：部署后健康检查
 
-## 安全状态
+## 设计参考与鸣谢 / Design acknowledgements
 
-CoveChat 不会在解密失败时降级为明文。服务端只转发带版本的不透明密文信封，
-附件密钥、原文件名和消息明文不会进入服务端模型。官方 libsignal 依赖固定到
-明确提交，MLS 使用 OpenMLS 0.8.1；两者均通过 Rust/WASM 边界调用。浏览器端
-Ratchet 与 MLS 状态使用相互域隔离的设备状态密钥加密后保存。一次性 Signal
-预密钥和 MLS KeyPackage 使用后自动轮换并重新发布。
-
-这些实现和测试不等同于独立密码学审计。任何公开部署都必须保留
-`0.x experimental` 标识。详情见 [SECURITY.md](SECURITY.md) 和
-[威胁模型](docs/security/threat-model.md)。
+CoveChat 的信息层级、聊天交互节奏和动画研究参考了开源项目 [Telegram Web K](https://github.com/morethanwords/tweb)（GPL-3.0）。CoveChat 没有引入 Telegram 的协议、品牌资产或加密实现；壁纸、组件、声音反馈与视觉资产均为独立实现。Telegram 是 Telegram Messenger LLP 的商标。
 
 ## License
 
 AGPL-3.0-only
-
-## 设计参考与鸣谢 / Design references and acknowledgements
-
-CoveChat 的界面层级、聊天交互节奏和动效研究参考了开源项目
-[Telegram Web K](https://github.com/morethanwords/tweb)（GPL-3.0）。感谢 Telegram Web K
-贡献者公开其实现，使社区能够研究成熟通信产品的可用性、动画和无障碍设计。
-
-CoveChat 没有引入 Telegram 的网络协议、品牌资源或加密实现。聊天壁纸、组件代码、声音反馈和
-视觉资产均为 CoveChat 的独立实现；Telegram 是 Telegram Messenger LLP 的商标。
-
-CoveChat's information hierarchy, interaction rhythm, and motion research were informed by the
-open-source [Telegram Web K](https://github.com/morethanwords/tweb) project (GPL-3.0). CoveChat does
-not include Telegram's protocol, branded assets, or cryptographic implementation. All CoveChat UI,
-wallpaper, and sound-feedback assets are independently implemented. Telegram is a trademark of
-Telegram Messenger LLP.
