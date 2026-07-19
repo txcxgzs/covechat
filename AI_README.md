@@ -233,6 +233,7 @@ gh run list --repo txcxgzs/covechat --limit 3
 - **2026-07-19（部署复核）**：发现验证脚本错误假设 MinIO/API 精简镜像有 curl，已改用 web 容器 wget/API 内建健康检查；CI 增加 Bash/Compose 配置校验。修正过时 Caddy 5173 示例，新增 Nginx 8088 反代示例。修复匿名限流客户端 IP 传递：公网代理覆盖 X-Forwarded-For，内部 Nginx 透传，API 拒绝非 IP subject。
 - **2026-07-19（MLS 发送者绑定）**：Rust 核心从 OpenMLS 已验证消息返回 senderIdentity；Web 在采用处理后的 MLS 状态前，验证内层 credential 设备 ID 与外层认证信封 senderDeviceId 完全一致。Rust 检查、前端构建及发送者匹配测试通过；安全退群控制消息以此为前置条件继续实现。
 - **2026-07-19（安全退群）**：删除虚假的“本机隐藏群组”逻辑。普通成员现在发送只路由给管理员的 MLS 加密 leave-request；管理员验证后提交 Remove commit；离开者处理新 Epoch 后通过新增 Rust/WASM delete_group 删除 OpenMLS 持久化状态及本地元数据。管理员退出仍要求先完成尚未实现的管理权限转移。
+- **2026-07-19（管理员转移）**：新增 MLS 加密 group-policy 与单调 policyRevision；只接受当前管理员发送、版本严格 +1、且新管理员为现有成员的策略。群管理 UI 增加“转移管理权”，原管理员同步完成后可发起安全退群。anyone 邀请继续禁用，因为尚不能安全区分非管理员 Add/Remove commit。
 
 - **2026-07-18（第 1 轮）**：首次接手。用户要求阅读项目、查看进度文档、准备接手开发。已确认工作区干净，下一步从续作清单第 1 项（补测试）开始。
 - **2026-07-18（第 2 轮）**：用户说"推进开发"。按续作清单第 1 项补测试：

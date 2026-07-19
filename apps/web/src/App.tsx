@@ -40,6 +40,7 @@ import {
   requestEncryptedGroupLeave,
   sendEncryptedGroupText,
   setGroupInvitePolicy,
+  transferEncryptedGroupAdministration,
 } from "./security/groups";
 import {
   receiveEncryptedTexts,
@@ -641,6 +642,22 @@ function GroupWorkspace({ locale, profile, session, t }: {
     }
   }
 
+  async function transferAdministration(memberDeviceId: string) {
+    if (!selected || !window.confirm(t("transferAdminConfirm"))) return;
+    try {
+      await transferEncryptedGroupAdministration(
+        profile,
+        session,
+        selected.groupId,
+        memberDeviceId,
+      );
+      refreshGroups();
+      setStatus(t("adminTransferred"));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : t("vaultError"));
+    }
+  }
+
   async function leaveGroup() {
     if (!selected) return;
     if (isAdmin) {
@@ -729,12 +746,20 @@ function GroupWorkspace({ locale, profile, session, t }: {
                           {isSelf ? <em className="self-tag">·</em> : null}
                           {/* 管理员可移除其他成员；不能移除自己 */}
                           {isAdmin && !isSelf ? (
-                            <button
-                              className="remove-member-btn"
-                              onClick={() => void removeMember(memberDeviceId)}
-                            >
-                              {t("removeMember")}
-                            </button>
+                            <span className="member-actions">
+                              <button
+                                className="transfer-admin-btn"
+                                onClick={() => void transferAdministration(memberDeviceId)}
+                              >
+                                {t("transferAdmin")}
+                              </button>
+                              <button
+                                className="remove-member-btn"
+                                onClick={() => void removeMember(memberDeviceId)}
+                              >
+                                {t("removeMember")}
+                              </button>
+                            </span>
                           ) : null}
                         </li>
                       );

@@ -4,6 +4,7 @@ import {
   doesMlsSenderMatchEnvelope,
   groupLeaveRequestRecipient,
   isAuthorizedGroupCommit,
+  isAuthorizedGroupPolicy,
 } from "./groups";
 
 function profileWithAdmins(adminDeviceIds: string[]): SecureProfile {
@@ -56,5 +57,43 @@ describe("encrypted group leave routing", () => {
     const profile = profileWithAdmins(["device-local"]);
     expect(() => groupLeaveRequestRecipient(profile, "group-1"))
       .toThrow("transfer administration");
+  });
+});
+
+describe("encrypted group policy", () => {
+  it("accepts a monotonic admin transfer authored by the current admin", () => {
+    const profile = profileWithAdmins(["device-admin"]);
+    const metadata = profile.mls.groups?.[0];
+    if (!metadata) throw new Error("test group missing");
+    metadata.policyRevision = 3;
+    expect(isAuthorizedGroupPolicy(metadata, "device-admin", {
+      version: 1,
+      type: "group-policy",
+      revision: 4,
+      adminDeviceIds: ["device-member"],
+      invitePolicy: "admins",
+      createdAt: 1,
+    })).toBe(true);
+  });
+
+  it("rejects rollback, a non-admin author, and a non-member replacement", () => {
+    const profile = profileWithAdmins(["device-admin"]);
+    const metadata = profile.mls.groups?.[0];
+    if (!metadata) throw new Error("test group missing");
+    metadata.policyRevision = 3;
+    const policy = {
+      version: 1 as const,
+      type: "group-policy" as const,
+      revision: 4,
+      adminDeviceIds: ["device-member"],
+      invitePolicy: "admins" as const,
+      createdAt: 1,
+    };
+    expect(isAuthorizedGroupPolicy(metadata, "device-member", policy)).toBe(false);
+    expect(isAuthorizedGroupPolicy(metadata, "device-admin", { ...policy, revision: 3 })).toBe(false);
+    expect(isAuthorizedGroupPolicy(metadata, "device-admin", {
+      ...policy,
+      adminDeviceIds: ["unknown-device"],
+    })).toBe(false);
   });
 });

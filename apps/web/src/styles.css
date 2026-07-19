@@ -186,6 +186,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .self-tag { color: var(--muted); font-style: normal; }
 .remove-member-btn { border: 0; border-radius: 6px; padding: 4px 8px; background: #fee; color: #c33; font-size: 11px; cursor: pointer; }
 .remove-member-btn:hover { background: #fcc; }
+.member-actions { display: flex; gap: 5px; }
+.transfer-admin-btn { border: 0; border-radius: 6px; padding: 4px 8px; background: #e6f5f3; color: #087d7d; font-size: 11px; cursor: pointer; }
+.transfer-admin-btn:hover { background: #ccebe8; }
 .invite-policy-section { display: grid; gap: 4px; }
 .invite-policy-section label { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: white; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; font-size: 12px; }
 .leave-group-section { padding-top: 4px; }

@@ -69,9 +69,19 @@ type MlsEnvelope = {
   ciphertext: string;
 };
 
+type GroupPolicyPayload = {
+  version: 1;
+  type: "group-policy";
+  revision: number;
+  adminDeviceIds: string[];
+  invitePolicy: "admins";
+  createdAt: number;
+};
+
 type MlsApplicationPayload =
   | { version: 1; type: "text"; body: string; createdAt: number }
-  | { version: 1; type: "leave-request"; createdAt: number };
+  | { version: 1; type: "leave-request"; createdAt: number }
+  | GroupPolicyPayload;
 
 export type DecryptedGroupMessage = {
   envelopeId: string;
@@ -138,6 +148,7 @@ function updateMetadata(
     memberDeviceIds: [],
     adminDeviceIds: [],
     invitePolicy: "admins",
+    policyRevision: 0,
     memberLeafIndices: {},
   };
   metadata.epoch = result.epoch;
@@ -151,6 +162,7 @@ function updateMetadata(
   // 兼容旧数据：缺少可选字段时补默认值
   metadata.adminDeviceIds ??= [];
   metadata.invitePolicy ??= "admins";
+  metadata.policyRevision ??= 0;
   metadata.memberLeafIndices ??= {};
   if (!existing) groups(profile).push(metadata);
   return metadata;
@@ -190,6 +202,25 @@ export function groupLeaveRequestRecipient(profile: SecureProfile, groupId: stri
     throw new Error("group has no reachable administrator");
   }
   return adminDeviceId;
+}
+
+export function isAuthorizedGroupPolicy(
+  metadata: MlsGroupMetadata,
+  senderDeviceId: string,
+  payload: GroupPolicyPayload,
+): boolean {
+  const currentAdmins = (metadata.adminDeviceIds ?? []).length > 0
+    ? metadata.adminDeviceIds ?? []
+    : metadata.memberDeviceIds.slice(0, 1);
+  return (
+    currentAdmins.includes(senderDeviceId)
+    && Number.isSafeInteger(payload.revision)
+    && payload.revision === (metadata.policyRevision ?? 0) + 1
+    && Array.isArray(payload.adminDeviceIds)
+    && payload.adminDeviceIds.length === 1
+    && metadata.memberDeviceIds.includes(payload.adminDeviceIds[0])
+    && payload.invitePolicy === "admins"
+  );
 }
 
 /// 切换群邀请策略。仅管理员可调用；非管理员调用抛错。
@@ -268,6 +299,7 @@ export async function createEncryptedGroup(
   // 创建者默认为管理员，邀请策略默认为 admins（仅管理员可邀请）。
   metadata.adminDeviceIds = [profile.deviceId];
   metadata.invitePolicy = "admins";
+  metadata.policyRevision = 1;
   await saveMlsState(profile);
   void syncEncryptedBackup(profile, session).catch(() => undefined);
   return metadata;
@@ -320,6 +352,18 @@ export async function addGroupMember(
       name: metadata.name,
       ciphertext: result.welcome,
     });
+    const migrateLegacyPolicy = (metadata.policyRevision ?? 0) === 0;
+    if (migrateLegacyPolicy) {
+      metadata.adminDeviceIds = [profile.deviceId];
+      metadata.policyRevision = 1;
+      await saveMlsState(profile);
+    }
+    await sendEncryptedGroupPolicy(
+      profile,
+      session,
+      metadata,
+      migrateLegacyPolicy ? metadata.memberDeviceIds : [device.deviceId],
+    );
   }
   return metadata;
 }
@@ -412,6 +456,66 @@ async function sendEncryptedGroupApplication(
   });
 }
 
+async function sendEncryptedGroupPolicy(
+  profile: SecureProfile,
+  session: AuthSession,
+  metadata: MlsGroupMetadata,
+  recipients = metadata.memberDeviceIds,
+): Promise<void> {
+  const admins = metadata.adminDeviceIds ?? [];
+  if (admins.length !== 1 || !metadata.memberDeviceIds.includes(admins[0])) {
+    throw new Error("group policy must contain one current admin device");
+  }
+  await sendEncryptedGroupApplication(profile, session, metadata, {
+    version: 1,
+    type: "group-policy",
+    revision: metadata.policyRevision ?? 1,
+    adminDeviceIds: admins,
+    invitePolicy: "admins",
+    createdAt: Date.now(),
+  }, recipients);
+}
+
+export async function transferEncryptedGroupAdministration(
+  profile: SecureProfile,
+  session: AuthSession,
+  groupId: string,
+  newAdminDeviceId: string,
+): Promise<void> {
+  await ensureCrypto();
+  const metadata = groups(profile).find((group) => group.groupId === groupId);
+  if (!metadata) throw new Error("group not found");
+  if (!isGroupAdmin(profile, groupId)) throw new Error("only an admin can transfer administration");
+  if (newAdminDeviceId === profile.deviceId || !metadata.memberDeviceIds.includes(newAdminDeviceId)) {
+    throw new Error("new admin must be another current group member");
+  }
+  const nextRevision = (metadata.policyRevision ?? 1) + 1;
+  const previousAdmins = metadata.adminDeviceIds;
+  const previousRevision = metadata.policyRevision;
+  try {
+    // Encrypt while the OpenMLS sender credential still proves the current
+    // device authored the transition. Receivers authorize against revision-1.
+    metadata.adminDeviceIds = previousAdmins;
+    metadata.policyRevision = previousRevision;
+    await sendEncryptedGroupApplication(profile, session, metadata, {
+      version: 1,
+      type: "group-policy",
+      revision: nextRevision,
+      adminDeviceIds: [newAdminDeviceId],
+      invitePolicy: "admins",
+      createdAt: Date.now(),
+    });
+    metadata.adminDeviceIds = [newAdminDeviceId];
+    metadata.policyRevision = nextRevision;
+    await saveMlsState(profile);
+    void syncEncryptedBackup(profile, session).catch(() => undefined);
+  } catch (error) {
+    metadata.adminDeviceIds = previousAdmins;
+    metadata.policyRevision = previousRevision;
+    throw error;
+  }
+}
+
 export async function requestEncryptedGroupLeave(
   profile: SecureProfile,
   session: AuthSession,
@@ -433,7 +537,7 @@ export async function receiveEncryptedGroupMessages(
   session: AuthSession,
 ): Promise<DecryptedGroupMessage[]> {
   await ensureCrypto();
-  const envelopes = await readMailbox(session);
+  const envelopes = [...await readMailbox(session)].sort((left, right) => left.sequence - right.sequence);
   const messages: DecryptedGroupMessage[] = [];
   for (const envelope of envelopes) {
     try {
@@ -451,6 +555,7 @@ export async function receiveEncryptedGroupMessages(
         // membership commits are accepted only from this authenticated device.
         metadata.adminDeviceIds = [envelope.senderDeviceId];
         metadata.invitePolicy = "admins";
+        metadata.policyRevision = 0;
         const refreshed = JSON.parse(wasm_mls_refresh_key_package(
           JSON.stringify(profile.mls.state),
         )) as { state: Record<string, unknown>; keyPackage: string };
@@ -496,6 +601,14 @@ export async function receiveEncryptedGroupMessages(
           if (!currentMetadata.memberDeviceIds.includes(envelope.senderDeviceId)) {
             throw new Error("leave requester is not a current group member");
           }
+        } else if (payload.type === "group-policy") {
+          const currentMetadata = groups(profile).find((group) => group.groupId === wrapper.groupId);
+          if (
+            !currentMetadata
+            || !isAuthorizedGroupPolicy(currentMetadata, envelope.senderDeviceId, payload)
+          ) {
+            throw new Error("invalid or unauthorized encrypted group policy");
+          }
         } else if (
           payload.type !== "text"
           || typeof payload.body !== "string"
@@ -526,6 +639,15 @@ export async function receiveEncryptedGroupMessages(
       if (!payload) throw new Error("MLS application payload is missing");
       if (payload.type === "leave-request") {
         await removeGroupMember(profile, session, wrapper.groupId, envelope.senderDeviceId);
+        await acknowledgeEnvelope(envelope.envelopeId, session);
+        continue;
+      }
+      if (payload.type === "group-policy") {
+        metadata.adminDeviceIds = [...payload.adminDeviceIds];
+        metadata.invitePolicy = payload.invitePolicy;
+        metadata.policyRevision = payload.revision;
+        await saveMlsState(profile);
+        void syncEncryptedBackup(profile, session).catch(() => undefined);
         await acknowledgeEnvelope(envelope.envelopeId, session);
         continue;
       }

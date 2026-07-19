@@ -66,6 +66,8 @@ export type MlsGroupMetadata = {
   adminDeviceIds?: string[];
   // 邀请策略：anyone=所有成员可邀请，admins=仅管理员可邀请。
   invitePolicy?: "anyone" | "admins";
+  // 加密群策略的单调版本，防止管理员列表回滚。
+  policyRevision?: number;
   // deviceId → MLS leafIndex 映射。removeGroupMember 需要 leafIndex 定位成员。
   memberLeafIndices?: Record<string, number>;
 };
