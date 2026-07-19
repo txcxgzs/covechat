@@ -285,6 +285,7 @@ body { overflow: hidden; background: #eef3f6; }
 .chat-title input { border: 0; outline: 0; background: transparent; color: #163149; font-size: 15px; font-weight: 760; padding: 2px 0; }
 .icon-button { border-radius: 50%; transition: transform 140ms ease, background 140ms ease; }
 .icon-button:hover { transform: scale(1.06); }
+.icon-button.active { color: var(--teal); background: #e5f4f3; }
 .icon-button:active, .send:active, .new-button:active { transform: scale(.94); }
 .messages {
   padding: 28px clamp(18px, 4vw, 58px) 12px;
@@ -301,7 +302,7 @@ body { overflow: hidden; background: #eef3f6; }
 .me .bubble { border-radius: 16px 16px 5px 16px; background: #d9f4ef; }
 .bubble p { font-size: 13.5px; }
 .bubble footer svg { animation: check-in 300ms 120ms var(--motion-spring) both; }
-.composer { margin: 9px clamp(14px, 3vw, 42px) 18px; border: 0; border-radius: 22px; background: #fff; box-shadow: 0 7px 30px #15354d17; transition: box-shadow 180ms ease, transform 180ms ease; }
+.composer { position: relative; margin: 9px clamp(14px, 3vw, 42px) 18px; border: 0; border-radius: 22px; background: #fff; box-shadow: 0 7px 30px #15354d17; transition: box-shadow 180ms ease, transform 180ms ease; }
 .composer:focus-within { box-shadow: 0 10px 34px #15354d22, 0 0 0 2px #159b9a26; transform: translateY(-1px); }
 .composer textarea { border-radius: 22px 22px 0 0; background: transparent; }
 .send { border-radius: 50%; box-shadow: 0 5px 14px #159b9a3d; transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease; }
@@ -405,9 +406,10 @@ body { overflow: hidden; background: #eef3f6; }
 .leave-group-section { margin-top: 8px; padding: 12px 18px 22px; background: #fff; }
 .leave-group-btn { min-height: 44px; border-radius: 12px; background: #fff1f1; font-size: var(--font-14); line-height: var(--line-14); transition: background 140ms ease, transform 140ms ease; }
 .leave-group-btn:hover { background: #ffe4e4; transform: translateY(-1px); }
-.group-composer { display: grid; grid-template-columns: minmax(0, 1fr) 48px; align-items: center; min-height: 58px; padding: 5px 7px 5px 16px; border-radius: 24px; }
+.group-composer { display: grid; grid-template-columns: minmax(0, 1fr) 40px 48px; align-items: center; min-height: 58px; padding: 5px 7px 5px 16px; border-radius: 24px; }
 .group-composer textarea { min-width: 0; min-height: 48px; max-height: 120px; padding: 13px 8px 9px 0; border-radius: 0; font-size: var(--font-15); line-height: var(--line-15); }
 .group-composer .send { width: 44px; height: 44px; align-self: center; }
+.group-composer .group-emoji { width: 38px; height: 38px; }
 
 /* Readable application type scale, aligned with Telegram Web's 16/15/14/13 rhythm. */
 .section-heading h1 { font-size: 26px; line-height: 32px; }
@@ -451,7 +453,7 @@ body { overflow: hidden; background: #eef3f6; }
 .wallpaper-midnight .composer {
   position: relative;
   z-index: 1;
-  overflow: hidden;
+  overflow: visible;
   color: #18354c;
   background: #fff !important;
   box-shadow: 0 10px 34px #06192370;
@@ -483,6 +485,14 @@ body { overflow: hidden; background: #eef3f6; }
 .reply-preview small { overflow: hidden; color: var(--muted); font-size: var(--font-12); line-height: var(--line-12); white-space: nowrap; text-overflow: ellipsis; }
 .reply-preview .icon-button { width: 32px; height: 32px; }
 .group-composer .reply-preview { grid-column: 1 / -1; margin: -5px -7px 0 -16px; }
+.emoji-picker { position: absolute; right: 0; bottom: calc(100% + 10px); width: min(340px, calc(100vw - 32px)); padding: 10px; border: 1px solid #dce7ec; border-radius: 18px; color: #18354c; background: #fffffff5; box-shadow: 0 18px 54px #102b4642; backdrop-filter: blur(20px); z-index: 25; transform-origin: right bottom; animation: emoji-pop .24s cubic-bezier(.34, 1.56, .64, 1) both; }
+.emoji-picker header { height: 34px; padding: 0 5px 7px; display: flex; align-items: center; justify-content: space-between; color: #5d7484; }
+.emoji-picker header strong { font-size: var(--font-13); }
+.emoji-picker header svg { width: 18px; color: var(--teal); }
+.emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
+.emoji-grid button { width: 36px; height: 36px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; font-size: 21px; transition: transform .14s cubic-bezier(.34, 1.56, .64, 1), background .12s ease; }
+.emoji-grid button:hover { transform: translateY(-2px) scale(1.16); background: #e7f5f4; }
+.emoji-grid button:active { transform: scale(.9); }
 
 /* Real local settings workspace instead of a decorative settings icon. */
 .settings-workspace { grid-column: 2 / -1; min-width: 0; overflow-y: auto; background: #f3f6f8; animation: workspace-enter .3s cubic-bezier(.4, 0, .2, 1) both; }
@@ -529,6 +539,7 @@ body { overflow: hidden; background: #eef3f6; }
 @keyframes menu-pop { from { opacity: 0; transform: translateY(-4px) scale(.88); } to { opacity: 1; transform: none; } }
 @keyframes reply-expand { from { opacity: 0; transform: translateY(8px); max-height: 0; } to { opacity: 1; transform: none; max-height: 58px; } }
 @keyframes settings-card-in { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes emoji-pop { from { opacity: 0; transform: translateY(10px) scale(.86); } to { opacity: 1; transform: none; } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }

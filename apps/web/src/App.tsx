@@ -186,6 +186,24 @@ function ChatHeader({ onDetails, recipient, onRecipientChange, t }: {
   );
 }
 
+const CHAT_EMOJI = [
+  "😀", "😂", "🥹", "😊", "😍", "🥰", "😎", "🤔",
+  "👍", "👎", "👏", "🙏", "💪", "🤝", "👌", "✌️",
+  "❤️", "💙", "💚", "🔥", "✨", "🎉", "💯", "🚀",
+  "🔒", "🛡️", "📎", "📷", "✅", "⚠️", "👀", "💬",
+] as const;
+
+function EmojiPicker({ label, onPick }: { label: string; onPick: (emoji: string) => void }) {
+  return (
+    <div className="emoji-picker" role="dialog" aria-label={label} onPointerDown={(event) => event.stopPropagation()}>
+      <header><strong>{label}</strong><Smile /></header>
+      <div className="emoji-grid">
+        {CHAT_EMOJI.map((emoji) => <button type="button" key={emoji} onClick={() => onPick(emoji)}>{emoji}</button>)}
+      </div>
+    </div>
+  );
+}
+
 function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
   onSend: (message: string) => void;
   onAttachment: (file: File) => void;
@@ -194,8 +212,28 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
   t: Translate;
 }) {
   const [draft, setDraft] = useState("");
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
+  const textInput = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!emojiOpen) return;
+    const close = () => setEmojiOpen(false);
+    window.addEventListener("pointerdown", close, { once: true });
+    return () => window.removeEventListener("pointerdown", close);
+  }, [emojiOpen]);
+  function insertEmoji(emoji: string) {
+    const input = textInput.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? draft.length;
+    setDraft(`${draft.slice(0, start)}${emoji}${draft.slice(end)}`);
+    setEmojiOpen(false);
+    requestAnimationFrame(() => {
+      input?.focus();
+      input?.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
+    playUiSound("open");
+  }
   function submit(event: FormEvent) {
     event.preventDefault();
     const value = draft.trim();
@@ -213,7 +251,7 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
           <button type="button" className="icon-button" onClick={onCancelReply}><X /></button>
         </div>
       ) : null}
-      <textarea aria-label={t("messageMaya")} placeholder={t("messageMaya")} value={draft}
+      <textarea ref={textInput} aria-label={t("messageMaya")} placeholder={t("messageMaya")} value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
@@ -238,10 +276,11 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
           <button type="button" className="icon-button" aria-label={t("insertDocument")} onClick={() => fileInput.current?.click()}><FileText /></button>
         </div>
         <div>
-          <button type="button" className="icon-button" aria-label={t("chooseEmoji")}><Smile /></button>
+          <button type="button" className={`icon-button ${emojiOpen ? "active" : ""}`} aria-label={t("chooseEmoji")} aria-expanded={emojiOpen} onPointerDown={(event) => event.stopPropagation()} onClick={() => { playUiSound("open"); setEmojiOpen((open) => !open); }}><Smile /></button>
           <button className="send" aria-label={t("sendMessage")} disabled={!draft.trim()}><Send /></button>
         </div>
       </div>
+      {emojiOpen ? <EmojiPicker label={t("chooseEmoji")} onPick={insertEmoji} /> : null}
     </form>
   );
 }
@@ -601,9 +640,28 @@ function GroupWorkspace({ locale, profile, session, t }: {
   const [messages, setMessages] = useState<Message[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message>();
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const groupTextInput = useRef<HTMLTextAreaElement>(null);
   const selected = availableGroups.find((group) => group.groupId === selectedGroupId);
   // 当前设备是否为该群管理员（控制移除成员、邀请策略等管理 UI 的可见性）
   const isAdmin = selected ? isGroupAdmin(profile, selected.groupId) : false;
+
+  useEffect(() => {
+    if (!emojiOpen) return;
+    const close = () => setEmojiOpen(false);
+    window.addEventListener("pointerdown", close, { once: true });
+    return () => window.removeEventListener("pointerdown", close);
+  }, [emojiOpen]);
+
+  function insertGroupEmoji(emoji: string) {
+    const input = groupTextInput.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? draft.length;
+    setDraft(`${draft.slice(0, start)}${emoji}${draft.slice(end)}`);
+    setEmojiOpen(false);
+    requestAnimationFrame(() => input?.focus());
+    playUiSound("open");
+  }
 
   function refreshGroups() {
     const next = [...listEncryptedGroups(profile)];
@@ -828,12 +886,15 @@ function GroupWorkspace({ locale, profile, session, t }: {
                 </div>
               ) : null}
               <textarea
+                ref={groupTextInput}
                 aria-label={t("messageMaya")}
                 placeholder={t("messageMaya")}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
               />
+              <button type="button" className={`icon-button group-emoji ${emojiOpen ? "active" : ""}`} aria-label={t("chooseEmoji")} aria-expanded={emojiOpen} onPointerDown={(event) => event.stopPropagation()} onClick={() => { playUiSound("open"); setEmojiOpen((open) => !open); }}><Smile /></button>
               <button className="send" aria-label={t("sendMessage")} disabled={!draft.trim()}><Send /></button>
+              {emojiOpen ? <EmojiPicker label={t("chooseEmoji")} onPick={insertGroupEmoji} /> : null}
             </form>
           </>
         ) : <div className="group-empty"><UsersRound /><p>{t("selectGroup")}</p></div>}
