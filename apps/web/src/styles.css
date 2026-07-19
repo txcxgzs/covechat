@@ -262,6 +262,13 @@ body { overflow: hidden; background: #eef3f6; }
 .conversations { background: #fff; z-index: 2; box-shadow: 8px 0 28px #18354c0b; }
 .section-heading { padding: 22px 20px 12px; }
 .section-heading h1 { font-size: 25px; }
+.conversations .section-heading { min-height: 72px; padding: 0 14px 0 20px; flex: 0 0 auto; }
+.conversations .section-heading h1 { margin: 0; font-size: 24px; line-height: 30px; letter-spacing: -.025em; }
+.conversations .section-heading .icon-button { width: 42px; height: 42px; color: #486274; border-radius: 50%; }
+.conversations .section-heading .icon-button:hover { color: var(--teal); background: #e7f4f4; transform: rotate(8deg) scale(1.04); }
+.conversations .search { min-height: 44px; margin: 2px 12px 10px; padding: 0 13px; border-radius: 22px; }
+.conversations .search input { padding: 11px 9px; font-size: var(--font-14); line-height: var(--line-14); }
+.conversations .conversation-scroll { padding: 0 8px 16px; }
 .new-button { margin: 0 20px 14px; border-radius: 12px; height: 44px; transition: transform 150ms ease, box-shadow 150ms ease, background 150ms ease; }
 .new-button:hover { transform: translateY(-1px); box-shadow: 0 9px 22px #0d969536; }
 .search { margin: 0 20px 12px; border: 0; border-radius: 18px; background: #f2f6f8; transition: box-shadow 160ms ease, background 160ms ease; }
@@ -271,7 +278,7 @@ body { overflow: hidden; background: #eef3f6; }
 .conversation { border-radius: 13px; padding: 12px; transition: background 140ms ease, transform 140ms ease; }
 .conversation:hover { transform: translateX(2px); }
 .conversation.selected { background: #e8f5f7; box-shadow: none; }
-.conversation.selected .avatar { box-shadow: 0 0 0 3px #fff, 0 0 0 5px #63cbc8; }
+.conversation.selected .avatar { box-shadow: none; }
 .avatar { background: linear-gradient(145deg, #d9f3f1, #c8e8ef); transition: box-shadow 180ms ease, transform 180ms ease; }
 .chat { grid-template-rows: 72px auto minmax(0, 1fr) auto; background: var(--chat-canvas); animation: workspace-enter 280ms var(--motion-spring) both; }
 .chat-header { background: #fffefa; padding: 0 18px; box-shadow: 0 1px 0 var(--line), 0 8px 24px #19364f0a; z-index: 2; }

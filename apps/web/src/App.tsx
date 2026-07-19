@@ -135,10 +135,9 @@ function ConversationList({ historyRevision, locale, onSelect, profile, recipien
   return (
     <aside className="conversations">
       <div className="section-heading">
-        <div><span className="eyeline">{t("privateWorkspace")}</span><h1>{t("messages")}</h1></div>
+        <h1>{t("messages")}</h1>
         <button className="icon-button" aria-label={t("newConversation")} onClick={() => onSelect("")}><Plus /></button>
       </div>
-      <button className="new-button" onClick={() => onSelect("")}><Plus />{t("newConversation")}</button>
       <label className="search">
         <Search aria-hidden="true" />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("searchConversations")} />
