@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import {
   BellOff, CheckCheck, CircleHelp, FileText, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Paperclip, Plus, Search, Send,
-  Languages, Settings, ShieldCheck, Smile, Trash2, UserRound, UsersRound, X
+  Languages, Settings, ShieldCheck, Smile, Trash2, UserRound, UsersRound, Volume2, VolumeX, X
 } from "lucide-react";
 import type { Conversation, Message } from "./data";
 import { copy, detectLocale, type Locale, type Translate } from "./i18n";
@@ -48,6 +48,7 @@ import {
   sendEncryptedText,
   subscribeEncryptedMailbox,
 } from "./security/signal";
+import { playUiSound, setUiSoundsEnabled, uiSoundsEnabled } from "./ui-feedback";
 
 /// 将字节数格式化为人类可读的 KB/MB 字符串。
 /// 用于附件上传进度显示。1024 进制，保留 1 位小数（< 1KB 时显示整数）。
@@ -57,13 +58,15 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function Navigation({ locale, t, onLocaleChange, profileName, activeView, onViewChange }: {
+function Navigation({ locale, t, onLocaleChange, profileName, activeView, onViewChange, soundEnabled, onSoundToggle }: {
   locale: Locale;
   t: Translate;
   onLocaleChange: () => void;
   profileName?: string;
   activeView: "messages" | "groups";
   onViewChange: (view: "messages" | "groups") => void;
+  soundEnabled: boolean;
+  onSoundToggle: () => void;
 }) {
   const nav = [
     { id: "messages" as const, label: t("messages"), icon: MessageCircle },
@@ -78,12 +81,15 @@ function Navigation({ locale, t, onLocaleChange, profileName, activeView, onView
             className={activeView === id ? "nav-item active" : "nav-item"}
             key={id}
             title={label}
-            onClick={() => onViewChange(id)}
+            onClick={() => { playUiSound("navigate"); onViewChange(id); }}
           >
             <Icon aria-hidden="true" /><span>{label}</span>
           </button>
         ))}
       </div>
+      <button className="nav-item sound-toggle" onClick={onSoundToggle} aria-label={soundEnabled ? "关闭界面音效" : "开启界面音效"} title={soundEnabled ? "关闭界面音效" : "开启界面音效"}>
+        {soundEnabled ? <Volume2 aria-hidden="true" /> : <VolumeX aria-hidden="true" />}<span>{soundEnabled ? "音效开启" : "音效关闭"}</span>
+      </button>
       <button className="nav-item language" onClick={onLocaleChange} aria-label={t("switchLanguage")}>
         <Languages aria-hidden="true" /><span>{locale === "zh-CN" ? "English" : "中文"}</span>
       </button>
@@ -317,7 +323,10 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
         ];
       });
       const lastText = [...visible].reverse().find((message) => message.body)?.body;
-      if (lastText) onReceivedText(lastText);
+      if (lastText) {
+        onReceivedText(lastText);
+        playUiSound("receive");
+      }
       setAttachments((current) => {
         const known = new Set(current.map((attachment) => attachment.objectId));
         return [
@@ -366,6 +375,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
         delivered: true,
         expiresAt,
       }]);
+      playUiSound("send");
       setAttachmentStatus("");
     } catch (error) {
       setAttachmentStatus(
@@ -556,6 +566,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
           delivered: true,
         })),
       ]);
+      if (received.length) playUiSound("receive");
     }
     void refresh();
     const unsubscribe = subscribeEncryptedMailbox(session, () => void refresh());
@@ -607,6 +618,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
         }).format(new Date()),
         delivered: true,
       }]);
+      playUiSound("send");
       setDraft("");
       setStatus("");
     } catch (error) {
@@ -697,7 +709,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
             <button
               className={group.groupId === selectedGroupId ? "selected" : ""}
               key={group.groupId}
-              onClick={() => { setSelectedGroupId(group.groupId); setDetailsOpen(false); }}
+              onClick={() => { playUiSound("navigate"); setSelectedGroupId(group.groupId); setDetailsOpen(false); }}
             >
               <span className="group-list-avatar"><UsersRound /></span>
               <span>
@@ -727,7 +739,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
                 aria-label={t("groupAdmin")}
                 title={t("groupAdmin")}
                 aria-expanded={detailsOpen}
-                onClick={() => setDetailsOpen((open) => !open)}
+                onClick={() => { playUiSound("open"); setDetailsOpen((open) => !open); }}
               ><CircleHelp /></button>
             </header>
             <section className="messages" aria-live="polite">
@@ -955,6 +967,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   const [recipient, setRecipient] = useState("");
   const [lastReceivedText, setLastReceivedText] = useState<string>();
   const [historyRevision, setHistoryRevision] = useState(0);
+  const [soundEnabled, setSoundEnabled] = useState(uiSoundsEnabled);
   const handleHistoryChange = useCallback(() => {
     setHistoryRevision((current) => current + 1);
   }, []);
@@ -978,12 +991,18 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
           locale={locale}
           t={t}
           profileName={profile.username}
-          onLocaleChange={() => setLocale((current) => current === "zh-CN" ? "en" : "zh-CN")}
+          soundEnabled={soundEnabled}
+          onSoundToggle={() => {
+            const next = !soundEnabled;
+            setSoundEnabled(next);
+            setUiSoundsEnabled(next);
+          }}
+          onLocaleChange={() => { playUiSound("navigate"); setLocale((current) => current === "zh-CN" ? "en" : "zh-CN"); }}
           onViewChange={setActiveView}
         />
         {activeView === "messages" ? (
           <>
-            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onSelect={setRecipient} profile={profile} recipient={recipient} t={t} />
+            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onSelect={(username) => { playUiSound("navigate"); setRecipient(username); }} profile={profile} recipient={recipient} t={t} />
             <Chat
               key={`chat-${locale}`}
               locale={locale}
@@ -993,10 +1012,10 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
               onRecipientChange={setRecipient}
               onReceivedText={setLastReceivedText}
               onHistoryChange={handleHistoryChange}
-              onDetails={() => setDetailsOpen(true)}
+              onDetails={() => { playUiSound("open"); setDetailsOpen(true); }}
               t={t}
             />
-            <SecurityPanel lastReceivedText={lastReceivedText} open={detailsOpen} onClose={() => setDetailsOpen(false)} locale={locale} profile={profile} recipient={recipient} session={session} t={t} />
+            <SecurityPanel lastReceivedText={lastReceivedText} open={detailsOpen} onClose={() => { playUiSound("open"); setDetailsOpen(false); }} locale={locale} profile={profile} recipient={recipient} session={session} t={t} />
           </>
         ) : (
           <GroupWorkspace locale={locale} profile={profile} session={session} t={t} />
