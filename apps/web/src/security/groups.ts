@@ -56,6 +56,7 @@ type MlsMessageResult = {
 
 type MlsProcessedResult = MlsGroupResult & {
   kind: "application" | "commit" | "proposal";
+  senderIdentity: string;
   plaintext?: string;
 };
 
@@ -107,6 +108,14 @@ function memberDeviceId(identity: string): string {
   const separator = identity.lastIndexOf("/");
   if (separator < 1) throw new Error("invalid MLS member identity");
   return identity.slice(separator + 1);
+}
+
+export function doesMlsSenderMatchEnvelope(identity: string, envelopeDeviceId: string): boolean {
+  try {
+    return memberDeviceId(identity) === envelopeDeviceId;
+  } catch {
+    return false;
+  }
 }
 
 function updateMetadata(
@@ -420,6 +429,9 @@ export async function receiveEncryptedGroupMessages(
         wrapper.groupId,
         wrapper.ciphertext,
       )) as MlsProcessedResult;
+      if (!doesMlsSenderMatchEnvelope(processed.senderIdentity, envelope.senderDeviceId)) {
+        throw new Error("MLS sender identity does not match the authenticated envelope sender");
+      }
       profile.mls.state = processed.state;
       updateMetadata(profile, processed);
       await saveMlsState(profile);

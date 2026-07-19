@@ -84,6 +84,7 @@ pub struct MlsProcessedResult {
     pub group_id: String,
     pub epoch: u64,
     pub kind: String,
+    pub sender_identity: String,
     pub plaintext: Option<String>,
     pub members: Vec<MlsMember>,
 }
@@ -397,6 +398,8 @@ pub fn process_message(
     let processed = group
         .process_message(&provider, protocol)
         .map_err(|error| error.to_string())?;
+    let sender_identity = String::from_utf8(processed.credential().serialized_content().to_vec())
+        .map_err(|_| "MLS sender identity is not valid UTF-8".to_string())?;
     let (kind, plaintext) = match processed.into_content() {
         ProcessedMessageContent::ApplicationMessage(message) => {
             ("application".to_owned(), Some(encode(message.into_bytes())))
@@ -417,6 +420,7 @@ pub fn process_message(
         group_id: group_id.to_owned(),
         epoch,
         kind,
+        sender_identity,
         plaintext,
         members,
     })
@@ -490,6 +494,7 @@ mod tests {
             process_message(bob.state, &created.group_id, &encrypted.ciphertext).expect("decrypt");
         bob.state = decrypted.state;
         assert_eq!(decrypted.kind, "application");
+        assert_eq!(decrypted.sender_identity, "alice/device-1");
         assert_eq!(
             decode(decrypted.plaintext.as_deref().expect("plaintext")).unwrap(),
             b"hello MLS"
@@ -508,6 +513,7 @@ mod tests {
             process_message(bob.state, &created.group_id, &removed.commit).expect("commit");
         bob.state = bob_commit.state;
         assert_eq!(bob_commit.epoch, 2);
+        assert_eq!(bob_commit.sender_identity, "alice/device-1");
 
         let after_removal =
             encrypt_message(alice.state, &created.group_id, b"secret after removal")

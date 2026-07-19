@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SecureProfile } from "./vault";
-import { isAuthorizedGroupCommit } from "./groups";
+import { doesMlsSenderMatchEnvelope, isAuthorizedGroupCommit } from "./groups";
 
 function profileWithAdmins(adminDeviceIds: string[]): SecureProfile {
   return {
@@ -29,5 +29,13 @@ describe("MLS membership commit authorization", () => {
     expect(isAuthorizedGroupCommit(profileWithAdmins(["device-admin"]), "group-1", "device-member")).toBe(false);
     expect(isAuthorizedGroupCommit(profileWithAdmins(["device-admin"]), "missing", "device-admin")).toBe(false);
     expect(isAuthorizedGroupCommit(profileWithAdmins([]), "group-1", "device-local")).toBe(false);
+  });
+});
+
+describe("MLS sender binding", () => {
+  it("binds the MLS credential identity to the authenticated envelope device", () => {
+    expect(doesMlsSenderMatchEnvelope("alice/device-1", "device-1")).toBe(true);
+    expect(doesMlsSenderMatchEnvelope("alice/device-1", "device-2")).toBe(false);
+    expect(doesMlsSenderMatchEnvelope("invalid", "device-1")).toBe(false);
   });
 });
