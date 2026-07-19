@@ -1929,13 +1929,7 @@ async fn anonymous_rate_limit(
         return Ok(());
     };
     // 从 X-Forwarded-For 提取客户端 IP；缺失时用 "anonymous" 兜底。
-    let subject = headers
-        .get("x-forwarded-for")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .unwrap_or("anonymous");
+    let subject = rate_limit_subject(headers);
     match rate_limiter
         .check(scope, subject, limit, window_seconds)
         .await
@@ -1947,6 +1941,16 @@ async fn anonymous_rate_limit(
             Err(StatusCode::SERVICE_UNAVAILABLE)
         }
     }
+}
+
+fn rate_limit_subject(headers: &HeaderMap) -> &str {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|item| item.parse::<IpAddr>().is_ok())
+        .unwrap_or("anonymous")
 }
 
 fn authenticated_websocket_device(headers: &HeaderMap, store: &mut Store) -> Option<Uuid> {
@@ -2935,6 +2939,21 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn rate_limit_subject_accepts_only_a_valid_first_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("203.0.113.8, 10.0.0.2"),
+        );
+        assert_eq!(rate_limit_subject(&headers), "203.0.113.8");
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("attacker-controlled-value"),
+        );
+        assert_eq!(rate_limit_subject(&headers), "anonymous");
     }
 
     // === read_directory 限流测试 ===

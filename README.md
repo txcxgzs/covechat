@@ -42,7 +42,8 @@ http://127.0.0.1:8088
 
 随后将 Nginx、Caddy 或面板反向代理的 HTTP/WebSocket 上游设置为
 `http://127.0.0.1:8088`。不要将 API、PostgreSQL、Redis 或 MinIO
-端口直接暴露到公网。示例见 [deploy/Caddyfile.example](deploy/Caddyfile.example)。
+端口直接暴露到公网。示例见 [Caddy](deploy/Caddyfile.example) 和
+[Nginx](deploy/nginx.reverse-proxy.example.conf) 配置。
 
 ### 配置 Origin 允许列表（重要）
 
@@ -136,6 +137,8 @@ chmod +x deploy/verify.sh
    - **WebSocket 支持**：宝塔默认反代配置不含 WebSocket 升级头。进入站点设置 → 配置文件，在 `location /` 块内加三行：
      ```nginx
      proxy_http_version 1.1;
+     proxy_set_header X-Forwarded-For $remote_addr;
+     proxy_set_header X-Forwarded-Proto $scheme;
      proxy_set_header Upgrade $http_upgrade;
      proxy_set_header Connection "upgrade";
      ```
