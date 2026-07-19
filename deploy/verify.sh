@@ -158,34 +158,31 @@ echo ""
 
 # ---------- 4. MinIO 健康端点 ----------
 echo ">>> 4/8 检查 MinIO 健康端点"
-MINIO_HEALTH="$(docker compose --env-file .env -f compose.deploy.yml exec -T minio \
-  curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/minio/health/live 2>/dev/null || true)"
-if [[ "$MINIO_HEALTH" == "200" ]]; then
+if docker compose --env-file .env -f compose.deploy.yml exec -T web \
+  wget -qO- http://minio:9000/minio/health/live >/dev/null 2>&1; then
   ok "MinIO /minio/health/live → 200"
 else
-  fail "MinIO 健康端点异常（HTTP $MINIO_HEALTH）"
+  fail "MinIO 健康端点异常（通过 web 容器无法访问）"
 fi
 echo ""
 
 # ---------- 5. API /health ----------
 echo ">>> 5/8 检查 API /health 端点"
-API_HEALTH="$(docker compose --env-file .env -f compose.deploy.yml exec -T api \
-  curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health 2>/dev/null || true)"
-if [[ "$API_HEALTH" == "200" ]]; then
+if docker compose --env-file .env -f compose.deploy.yml exec -T api \
+  /usr/local/bin/covechat-api --healthcheck >/dev/null 2>&1; then
   ok "API /health → 200"
 else
-  fail "API /health 异常（HTTP $API_HEALTH）"
+  fail "API 内置健康检查失败"
 fi
 echo ""
 
 # ---------- 6. Web /healthz ----------
 echo ">>> 6/8 检查 Web /healthz 端点"
-WEB_HEALTHZ="$(docker compose --env-file .env -f compose.deploy.yml exec -T web \
-  curl -s -o /dev/null -w '%{http_code}' http://localhost/healthz 2>/dev/null || true)"
-if [[ "$WEB_HEALTHZ" == "200" ]]; then
+if docker compose --env-file .env -f compose.deploy.yml exec -T web \
+  wget -qO- http://localhost/healthz >/dev/null 2>&1; then
   ok "Web /healthz → 200"
 else
-  fail "Web /healthz 异常（HTTP $WEB_HEALTHZ）"
+  fail "Web /healthz 异常"
 fi
 echo ""
 
