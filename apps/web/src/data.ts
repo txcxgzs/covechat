@@ -15,6 +15,7 @@ export type Message = {
   time: string;
   delivered?: boolean;
   expiresAt?: number;
+  replyTo?: import("./security/message-content").ReplyReference;
 };
 
 import type { Locale } from "./i18n";

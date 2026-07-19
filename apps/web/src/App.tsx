@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BellOff, CheckCheck, CheckCircle2, CircleHelp, Copy as CopyIcon, FileText, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Palette, Paperclip, Plus, Search, Send,
@@ -49,6 +49,8 @@ import {
   subscribeEncryptedMailbox,
 } from "./security/signal";
 import { playUiSound, setUiSoundsEnabled, uiSoundsEnabled } from "./ui-feedback";
+import { createReplyReference, type ReplyReference } from "./security/message-content";
+import { installUiRipple } from "./ui-ripple";
 
 /// 将字节数格式化为人类可读的 KB/MB 字符串。
 /// 用于附件上传进度显示。1024 进制，保留 1 位小数（< 1KB 时显示整数）。
@@ -205,7 +207,7 @@ function EmojiPicker({ label, onPick }: { label: string; onPick: (emoji: string)
 }
 
 function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
-  onSend: (message: string) => void;
+  onSend: (message: string, reply?: ReplyReference) => void;
   onAttachment: (file: File) => void;
   replyTo?: Message;
   onCancelReply: () => void;
@@ -238,7 +240,7 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
     event.preventDefault();
     const value = draft.trim();
     if (!value) return;
-    onSend(replyTo ? `↪ ${replyTo.text.replace(/\s+/gu, " ").slice(0, 96)}\n${value}` : value);
+    onSend(value, replyTo ? createReplyReference(replyTo.id, replyTo.text) : undefined);
     onCancelReply();
     setDraft("");
   }
@@ -292,11 +294,10 @@ function InteractiveMessage({ locale, message, onReply }: {
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | undefined>(undefined);
   const [selected, setSelected] = useState(false);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const swipeOffsetRef = useRef(0);
   const pointerStart = useRef<{ x: number; y: number } | undefined>(undefined);
   const isChinese = locale === "zh-CN";
-  const lines = message.text.split("\n");
-  const quoted = lines[0]?.startsWith("↪ ") ? lines[0].slice(2) : "";
-  const body = quoted ? lines.slice(1).join("\n") : message.text;
 
   useEffect(() => {
     if (!menu) return;
@@ -308,27 +309,49 @@ function InteractiveMessage({ locale, message, onReply }: {
   return (
     <article
       className={`message-row ${message.from} interactive-message ${selected ? "message-selected" : ""}`}
+      style={{
+        "--swipe-offset": `${swipeOffset}px`,
+        "--swipe-progress": Math.min(1, Math.abs(swipeOffset) / 52),
+        "--swipe-scale": 0.55 + Math.min(1, Math.abs(swipeOffset) / 52) * 0.45,
+      } as CSSProperties}
       onContextMenu={(event) => {
         event.preventDefault();
         playUiSound("open");
         setMenu({ x: Math.min(event.clientX, window.innerWidth - 190), y: Math.min(event.clientY, window.innerHeight - 170) });
       }}
-      onPointerDown={(event) => { pointerStart.current = { x: event.clientX, y: event.clientY }; }}
-      onPointerUp={(event) => {
+      onPointerDown={(event) => {
+        pointerStart.current = { x: event.clientX, y: event.clientY };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
         const start = pointerStart.current;
+        if (!start) return;
+        const horizontal = event.clientX - start.x;
+        const vertical = event.clientY - start.y;
+        if (horizontal < 0 && Math.abs(horizontal) > Math.abs(vertical)) {
+          const nextOffset = Math.max(-76, horizontal);
+          swipeOffsetRef.current = nextOffset;
+          setSwipeOffset(nextOffset);
+        }
+      }}
+      onPointerUp={() => {
         pointerStart.current = undefined;
-        if (start && event.clientX - start.x < -52 && Math.abs(event.clientY - start.y) < 44) {
+        if (swipeOffsetRef.current <= -52) {
           playUiSound("open");
           onReply(message);
         }
+        swipeOffsetRef.current = 0;
+        setSwipeOffset(0);
       }}
+      onPointerCancel={() => { pointerStart.current = undefined; swipeOffsetRef.current = 0; setSwipeOffset(0); }}
     >
       {message.from === "them" ? <span className="avatar avatar-small">MC</span> : null}
       <div className="bubble">
-        {quoted ? <blockquote>{quoted}</blockquote> : null}
-        <p>{body}</p>
+        {message.replyTo ? <blockquote data-reply-id={message.replyTo.messageId}>{message.replyTo.excerpt}</blockquote> : null}
+        <p>{message.text}</p>
         <footer><time>{message.time}</time>{message.delivered ? <CheckCheck aria-label={isChinese ? "已送达" : "Delivered"} /> : <LockKeyhole aria-label={isChinese ? "已加密" : "Encrypted"} />}</footer>
       </div>
+      <span className="swipe-reply-indicator" aria-hidden="true"><Reply /></span>
       {menu ? (
         <div className="message-menu" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()}>
           <button onClick={() => { onReply(message); setMenu(undefined); }}><Reply />{isChinese ? "回复" : "Reply"}</button>
@@ -382,6 +405,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
         }).format(new Date(item.createdAt)),
         delivered: true,
         expiresAt: item.expiresAt,
+        replyTo: item.reply,
       })));
       setAttachments(history.flatMap((item) => item.attachment ? [item.attachment] : []));
     });
@@ -408,6 +432,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
           attachment: message.attachment,
           createdAt: message.createdAt,
           expiresAt: message.expiresAt,
+          reply: message.reply,
         });
       }
       onHistoryChange();
@@ -427,6 +452,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
             }).format(new Date(message.createdAt)),
             delivered: true,
             expiresAt: message.expiresAt,
+            replyTo: message.reply,
           })),
         ];
       });
@@ -453,13 +479,13 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
     };
   }, [locale, profile, recipient, session]);
 
-  async function sendText(text: string) {
+  async function sendText(text: string, reply?: ReplyReference) {
     if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
       setAttachmentStatus(t("vaultError"));
       return;
     }
     try {
-      await sendEncryptedText(profile, session, recipient, text, disappearAfter || undefined);
+      await sendEncryptedText(profile, session, recipient, text, disappearAfter || undefined, reply);
       const id = crypto.randomUUID();
       const createdAt = Date.now();
       const expiresAt = disappearAfter ? createdAt + disappearAfter * 1000 : undefined;
@@ -469,6 +495,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
         body: text,
         createdAt,
         expiresAt,
+        reply,
       });
       onHistoryChange();
       void syncEncryptedBackup(profile, session).catch(() => undefined);
@@ -482,6 +509,7 @@ function Chat({ locale, onDetails, onHistoryChange, onReceivedText, onRecipientC
         }).format(new Date(createdAt)),
         delivered: true,
         expiresAt,
+        replyTo: reply,
       }]);
       playUiSound("send");
       setAttachmentStatus("");
@@ -686,6 +714,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
             minute: "2-digit",
           }).format(new Date(message.createdAt)),
           delivered: true,
+          replyTo: message.reply,
         })),
       ]);
       if (received.length) playUiSound("receive");
@@ -728,18 +757,19 @@ function GroupWorkspace({ locale, profile, session, t }: {
     event.preventDefault();
     if (!selected || !draft.trim()) return;
     const text = draft.trim();
-    const body = replyTo ? `↪ ${replyTo.text.replace(/\s+/gu, " ").slice(0, 96)}\n${text}` : text;
+    const reply = replyTo ? createReplyReference(replyTo.id, replyTo.text) : undefined;
     try {
-      await sendEncryptedGroupText(profile, session, selected.groupId, body);
+      await sendEncryptedGroupText(profile, session, selected.groupId, text, reply);
       setMessages((current) => [...current, {
         id: crypto.randomUUID(),
         from: "me",
-        text: body,
+        text,
         time: new Intl.DateTimeFormat(locale, {
           hour: "2-digit",
           minute: "2-digit",
         }).format(new Date()),
         delivered: true,
+        replyTo: reply,
       }]);
       playUiSound("send");
       setDraft("");
@@ -1137,6 +1167,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
     const stored = localStorage.getItem("covechat-wallpaper");
     return stored === "plain" || stored === "midnight" ? stored : "cove";
   });
+  useEffect(() => installUiRipple(), []);
   const handleHistoryChange = useCallback(() => {
     setHistoryRevision((current) => current + 1);
   }, []);

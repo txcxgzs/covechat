@@ -26,6 +26,7 @@ import {
   type SecureProfile,
 } from "./vault";
 import { syncEncryptedBackup } from "./backup";
+import { isReplyReference, type ReplyReference } from "./message-content";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -79,7 +80,7 @@ type GroupPolicyPayload = {
 };
 
 type MlsApplicationPayload =
-  | { version: 1; type: "text"; body: string; createdAt: number }
+  | { version: 1; type: "text"; body: string; reply?: ReplyReference; createdAt: number }
   | { version: 1; type: "leave-request"; createdAt: number }
   | GroupPolicyPayload;
 
@@ -89,6 +90,7 @@ export type DecryptedGroupMessage = {
   senderDeviceId: string;
   body: string;
   createdAt: number;
+  reply?: ReplyReference;
 };
 
 function ensureCrypto() {
@@ -418,6 +420,7 @@ export async function sendEncryptedGroupText(
   session: AuthSession,
   groupId: string,
   body: string,
+  reply?: ReplyReference,
 ): Promise<void> {
   await ensureCrypto();
   const metadata = groups(profile).find((group) => group.groupId === groupId);
@@ -427,6 +430,7 @@ export async function sendEncryptedGroupText(
     version: 1,
     type: "text",
     body: body.trim(),
+    reply,
     createdAt: Date.now(),
   });
 }
@@ -613,6 +617,7 @@ export async function receiveEncryptedGroupMessages(
           payload.type !== "text"
           || typeof payload.body !== "string"
           || !payload.body.trim()
+          || (payload.reply !== undefined && !isReplyReference(payload.reply))
         ) {
           throw new Error("invalid MLS application payload");
         }
@@ -656,6 +661,7 @@ export async function receiveEncryptedGroupMessages(
         groupId: wrapper.groupId,
         senderDeviceId: envelope.senderDeviceId,
         body: payload.body,
+        reply: payload.reply,
         createdAt: payload.createdAt,
       });
       await acknowledgeEnvelope(envelope.envelopeId, session);

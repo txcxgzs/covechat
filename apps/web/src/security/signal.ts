@@ -25,6 +25,7 @@ import {
 } from "./vault";
 import { observeAndCheckIdentity } from "./trust";
 import { syncEncryptedBackup } from "./backup";
+import { isReplyReference, type ReplyReference } from "./message-content";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -49,6 +50,7 @@ export type DecryptedTextMessage = {
   attachment?: AttachmentReference;
   createdAt: number;
   expiresAt?: number;
+  reply?: ReplyReference;
 };
 
 function ensureCrypto() {
@@ -94,7 +96,7 @@ function parseBundle(directory: DirectoryResponse["devices"][number]): SignalPre
 }
 
 type SignalPayload =
-  | { version: 1; type: "text"; senderUsername: string; body: string; createdAt: number; expiresAt?: number }
+  | { version: 1; type: "text"; senderUsername: string; body: string; reply?: ReplyReference; createdAt: number; expiresAt?: number }
   | { version: 1; type: "attachment"; senderUsername: string; attachment: AttachmentReference; createdAt: number; expiresAt?: number };
 
 async function sendEncryptedPayload(
@@ -175,6 +177,7 @@ export async function sendEncryptedText(
   recipientUsername: string,
   body: string,
   disappearAfterSeconds?: number,
+  reply?: ReplyReference,
 ): Promise<void> {
   const normalizedBody = body.trim();
   if (!normalizedBody) throw new Error("message must not be empty");
@@ -183,6 +186,7 @@ export async function sendEncryptedText(
     type: "text",
     senderUsername: profile.username,
     body: normalizedBody,
+    reply,
     createdAt: Date.now(),
     expiresAt: disappearAfterSeconds ? Date.now() + disappearAfterSeconds * 1000 : undefined,
   });
@@ -249,7 +253,7 @@ export async function receiveEncryptedTexts(
         || !/^[a-z0-9_]{3,32}$/u.test(payload.senderUsername)
         || (
           payload.type === "text"
-            ? typeof payload.body !== "string"
+            ? typeof payload.body !== "string" || (payload.reply !== undefined && !isReplyReference(payload.reply))
             : payload.type === "attachment"
               ? payload.attachment?.protocolVersion !== 1
                 || !payload.attachment.objectId
@@ -278,6 +282,7 @@ export async function receiveEncryptedTexts(
         senderDeviceId: envelope.senderDeviceId,
         senderUsername: payload.senderUsername,
         body: payload.type === "text" ? payload.body : undefined,
+        reply: payload.type === "text" ? payload.reply : undefined,
         attachment: payload.type === "attachment" ? payload.attachment : undefined,
         createdAt: payload.createdAt,
         expiresAt: payload.expiresAt,

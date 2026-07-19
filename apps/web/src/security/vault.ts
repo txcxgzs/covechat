@@ -158,6 +158,7 @@ export type LocalHistoryItem = {
   attachment?: import("@covechat/protocol").AttachmentReference;
   createdAt: number;
   expiresAt?: number;
+  reply?: import("./message-content").ReplyReference;
 };
 
 let cryptoReady: Promise<unknown> | undefined;
