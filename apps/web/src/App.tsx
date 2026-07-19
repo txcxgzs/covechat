@@ -526,6 +526,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const selected = availableGroups.find((group) => group.groupId === selectedGroupId);
   // 当前设备是否为该群管理员（控制移除成员、邀请策略等管理 UI 的可见性）
   const isAdmin = selected ? isGroupAdmin(profile, selected.groupId) : false;
@@ -674,10 +675,13 @@ function GroupWorkspace({ locale, profile, session, t }: {
   }
 
   return (
-    <main className="group-workspace">
+    <main className={`group-workspace ${detailsOpen ? "group-details-open" : ""}`}>
       <aside className="group-sidebar">
-        <header><h1>{t("groups")}</h1><span>{t("mlsProtocol")}</span></header>
-        <form onSubmit={(event) => void createGroup(event)}>
+        <header className="group-sidebar-heading">
+          <div><h1>{t("groups")}</h1><span>{t("mlsProtocol")}</span></div>
+          <span className="group-count">{availableGroups.length}</span>
+        </header>
+        <form className="group-create" onSubmit={(event) => void createGroup(event)}>
           <input
             aria-label={t("groupName")}
             placeholder={t("groupName")}
@@ -686,19 +690,19 @@ function GroupWorkspace({ locale, profile, session, t }: {
             value={groupName}
             onChange={(event) => setGroupName(event.target.value)}
           />
-          <button><Plus /> {t("createGroup")}</button>
+          <button aria-label={t("createGroup")} title={t("createGroup")}><Plus /></button>
         </form>
         <div className="group-list">
           {availableGroups.map((group) => (
             <button
               className={group.groupId === selectedGroupId ? "selected" : ""}
               key={group.groupId}
-              onClick={() => setSelectedGroupId(group.groupId)}
+              onClick={() => { setSelectedGroupId(group.groupId); setDetailsOpen(false); }}
             >
-              <UsersRound />
+              <span className="group-list-avatar"><UsersRound /></span>
               <span>
                 <strong>{group.name}</strong>
-                <small>{t("groupEpoch")} {group.epoch}</small>
+                <small><LockKeyhole /> {t("groupEpoch")} {group.epoch} · {group.memberDeviceIds.length} {t("groupMembers")}</small>
               </span>
             </button>
           ))}
@@ -709,7 +713,8 @@ function GroupWorkspace({ locale, profile, session, t }: {
         {selected ? (
           <>
             <header className="chat-header">
-              <span className="avatar"><UsersRound /></span>
+              <button className="mobile-menu icon-button" aria-label={t("groups")}><Menu /></button>
+              <span className="avatar group-chat-avatar"><UsersRound /></span>
               <div className="chat-title">
                 <strong>{selected.name}</strong>
                 <span>
@@ -717,88 +722,22 @@ function GroupWorkspace({ locale, profile, session, t }: {
                   {isAdmin ? <em className="admin-badge"> · {t("youAreAdmin")}</em> : null}
                 </span>
               </div>
-              <form className="group-invite" onSubmit={(event) => void invite(event)}>
-                <input
-                  aria-label={t("groupMemberUsername")}
-                  placeholder={t("groupMemberUsername")}
-                  pattern="[a-z0-9_]{3,32}"
-                  required
-                  value={inviteUsername}
-                  onChange={(event) => setInviteUsername(event.target.value.toLowerCase())}
-                />
-                <button>{t("addMember")}</button>
-              </form>
+              <button
+                className={`icon-button group-details-toggle ${detailsOpen ? "active" : ""}`}
+                aria-label={t("groupAdmin")}
+                title={t("groupAdmin")}
+                aria-expanded={detailsOpen}
+                onClick={() => setDetailsOpen((open) => !open)}
+              ><CircleHelp /></button>
             </header>
-            {/* 群管理面板：成员列表 + 邀请策略 + 退出群组 */}
-            <details className="group-admin-panel">
-              <summary>{t("groupAdmin")}</summary>
-              <div className="group-admin-body">
-                <section className="member-list-section">
-                  <h3>{t("memberList")}</h3>
-                  <ul className="member-list">
-                    {selected.memberDeviceIds.map((memberDeviceId) => {
-                      const memberIsAdmin = (selected.adminDeviceIds ?? []).includes(memberDeviceId);
-                      const isSelf = memberDeviceId === profile.deviceId;
-                      return (
-                        <li key={memberDeviceId} className="member-item">
-                          <span className="member-id">{memberDeviceId.slice(0, 8)}</span>
-                          {memberIsAdmin ? <em className="admin-tag">{t("youAreAdmin")}</em> : null}
-                          {isSelf ? <em className="self-tag">·</em> : null}
-                          {/* 管理员可移除其他成员；不能移除自己 */}
-                          {isAdmin && !isSelf ? (
-                            <span className="member-actions">
-                              <button
-                                className="transfer-admin-btn"
-                                onClick={() => void transferAdministration(memberDeviceId)}
-                              >
-                                {t("transferAdmin")}
-                              </button>
-                              <button
-                                className="remove-member-btn"
-                                onClick={() => void removeMember(memberDeviceId)}
-                              >
-                                {t("removeMember")}
-                              </button>
-                            </span>
-                          ) : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-                {/* 邀请策略切换：仅管理员可见 */}
-                {isAdmin ? (
-                  <section className="invite-policy-section">
-                    <h3>{t("invitePolicy")}</h3>
-                    <label>
-                      <input
-                        type="radio"
-                        name={`invite-policy-${selected.groupId}`}
-                        checked={(selected.invitePolicy ?? "admins") === "anyone"}
-                        disabled
-                        onChange={() => void changeInvitePolicy("anyone")}
-                      />
-                      {t("invitePolicyAnyone")}
-                    </label>
-                    <label>
-                      <input
-                        type="radio"
-                        name={`invite-policy-${selected.groupId}`}
-                        checked={(selected.invitePolicy ?? "admins") === "admins"}
-                        onChange={() => void changeInvitePolicy("admins")}
-                      />
-                      {t("invitePolicyAdmins")}
-                    </label>
-                  </section>
-                ) : null}
-                <section className="leave-group-section">
-                  <button className="leave-group-btn" onClick={() => void leaveGroup()}>
-                    {t("leaveGroup")}
-                  </button>
-                </section>
-              </div>
-            </details>
             <section className="messages" aria-live="polite">
+              {messages.length === 0 ? (
+                <div className="group-message-empty">
+                  <span><ShieldCheck /></span>
+                  <strong>{selected.name}</strong>
+                  <p>{t("mlsProtocol")} · {selected.memberDeviceIds.length} {t("groupMembers")}</p>
+                </div>
+              ) : null}
               {messages.map((message) => (
                 <article className={`message-row ${message.from}`} key={message.id}>
                   <div className="bubble">
@@ -821,6 +760,55 @@ function GroupWorkspace({ locale, profile, session, t }: {
           </>
         ) : <div className="group-empty"><UsersRound /><p>{t("selectGroup")}</p></div>}
       </section>
+      {selected ? (
+        <aside className={`group-details ${detailsOpen ? "open" : ""}`} aria-hidden={!detailsOpen}>
+          <header className="group-details-header">
+            <strong>{t("groupAdmin")}</strong>
+            <button className="icon-button" aria-label={t("groupAdmin")} onClick={() => setDetailsOpen(false)}><X /></button>
+          </header>
+          <section className="group-details-hero">
+            <span className="avatar"><UsersRound /></span>
+            <strong>{selected.name}</strong>
+            <small><LockKeyhole /> {t("mlsProtocol")} · Epoch {selected.epoch}</small>
+          </section>
+          <div className="group-details-scroll">
+            {isAdmin ? (
+              <section className="group-details-section">
+                <h3>{t("addMember")}</h3>
+                <form className="group-invite" onSubmit={(event) => void invite(event)}>
+                  <input aria-label={t("groupMemberUsername")} placeholder={t("groupMemberUsername")} pattern="[a-z0-9_]{3,32}" required value={inviteUsername} onChange={(event) => setInviteUsername(event.target.value.toLowerCase())} />
+                  <button aria-label={t("addMember")} title={t("addMember")}><Plus /></button>
+                </form>
+              </section>
+            ) : null}
+            <section className="group-details-section">
+              <h3>{t("memberList")} <span>{selected.memberDeviceIds.length}</span></h3>
+              <ul className="member-list">
+                {selected.memberDeviceIds.map((memberDeviceId) => {
+                  const memberIsAdmin = (selected.adminDeviceIds ?? []).includes(memberDeviceId);
+                  const isSelf = memberDeviceId === profile.deviceId;
+                  return (
+                    <li key={memberDeviceId} className="member-item">
+                      <span className="member-avatar"><UserRound /></span>
+                      <span className="member-copy"><strong>{memberDeviceId.slice(0, 8)}</strong><small>{isSelf ? profile.username : t("groupMembers")}</small></span>
+                      {memberIsAdmin ? <em className="admin-tag">{t("youAreAdmin")}</em> : null}
+                      {isAdmin && !isSelf ? <span className="member-actions"><button className="transfer-admin-btn" onClick={() => void transferAdministration(memberDeviceId)}>{t("transferAdmin")}</button><button className="remove-member-btn" onClick={() => void removeMember(memberDeviceId)}><Trash2 /></button></span> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+            {isAdmin ? (
+              <section className="group-details-section invite-policy-section">
+                <h3>{t("invitePolicy")}</h3>
+                <label><input type="radio" name={`invite-policy-${selected.groupId}`} checked={(selected.invitePolicy ?? "admins") === "admins"} onChange={() => void changeInvitePolicy("admins")} />{t("invitePolicyAdmins")}</label>
+                <label className="disabled"><input type="radio" name={`invite-policy-${selected.groupId}`} checked={(selected.invitePolicy ?? "admins") === "anyone"} disabled onChange={() => void changeInvitePolicy("anyone")} />{t("invitePolicyAnyone")}</label>
+              </section>
+            ) : null}
+            <section className="leave-group-section"><button className="leave-group-btn" onClick={() => void leaveGroup()}>{t("leaveGroup")}</button></section>
+          </div>
+        </aside>
+      ) : null}
     </main>
   );
 }
