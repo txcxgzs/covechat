@@ -6,7 +6,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
 };
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signer, SigningKey, Verifier};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -128,6 +128,24 @@ pub fn derive_recovery_signing_keypair(
         private_key: URL_SAFE_NO_PAD.encode(private.as_ref()),
         public_key: URL_SAFE_NO_PAD.encode(signing.verifying_key().to_bytes()),
     })
+}
+
+pub fn verify_signature(
+    public_key: &str,
+    payload: &[u8],
+    signature_base64: &str,
+) -> Result<bool, CryptoError> {
+    let pk_bytes = URL_SAFE_NO_PAD
+        .decode(public_key)
+        .map_err(|_| CryptoError::InvalidInput)?;
+    let pk = ed25519_dalek::VerifyingKey::try_from(pk_bytes.as_slice())
+        .map_err(|_| CryptoError::InvalidInput)?;
+    let sig_bytes = URL_SAFE_NO_PAD
+        .decode(signature_base64)
+        .map_err(|_| CryptoError::InvalidInput)?;
+    let sig = ed25519_dalek::Signature::from_slice(&sig_bytes)
+        .map_err(|_| CryptoError::InvalidInput)?;
+    Ok(pk.verify(payload, &sig).is_ok())
 }
 
 pub fn sign_payload(private_key: &str, payload: &[u8]) -> Result<String, CryptoError> {
@@ -733,6 +751,19 @@ pub fn wasm_derive_recovery_signing_keypair(
         .map_err(|_| js_error(CryptoError::InvalidInput))?;
     let keypair = derive_recovery_signing_keypair(recovery_secret, &context).map_err(js_error)?;
     serde_json::to_string(&keypair).map_err(|_| js_error(CryptoError::InvalidInput))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn wasm_verify_signature(
+    public_key: &str,
+    payload_base64: &str,
+    signature_base64: &str,
+) -> Result<bool, JsValue> {
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload_base64)
+        .map_err(|_| js_error(CryptoError::InvalidInput))?;
+    verify_signature(public_key, &payload, signature_base64).map_err(js_error)
 }
 
 #[cfg(target_arch = "wasm32")]

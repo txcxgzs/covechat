@@ -742,12 +742,13 @@ function GroupWorkspace({ locale, profile, session, t }: {
   const [inviteUsername, setInviteUsername] = useState("");
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesByGroup, setMessagesByGroup] = useState<Record<string, Message[]>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message>();
   const [emojiOpen, setEmojiOpen] = useState(false);
   const groupTextInput = useRef<HTMLTextAreaElement>(null);
   const selected = availableGroups.find((group) => group.groupId === selectedGroupId);
+  const messages = selected ? messagesByGroup[selected.groupId] || [] : [];
   // 当前设备是否为该群管理员（控制移除成员、邀请策略等管理 UI 的可见性）
   const isAdmin = selected ? isGroupAdmin(profile, selected.groupId) : false;
 
@@ -780,20 +781,27 @@ function GroupWorkspace({ locale, profile, session, t }: {
       const received = await receiveEncryptedGroupMessages(profile, session);
       if (!active) return;
       refreshGroups();
-      setMessages((current) => [
-        ...current,
-        ...received.map((message) => ({
-          id: message.envelopeId,
-          from: "them" as const,
-          text: message.body,
-          time: new Intl.DateTimeFormat(locale, {
-            hour: "2-digit",
-            minute: "2-digit",
-          }).format(new Date(message.createdAt)),
-          delivered: true,
-          replyTo: message.reply,
-        })),
-      ]);
+      setMessagesByGroup((current) => {
+        const next = { ...current };
+        for (const message of received) {
+          const groupMessages = next[message.groupId] || [];
+          next[message.groupId] = [
+            ...groupMessages,
+            {
+              id: message.envelopeId,
+              from: "them" as const,
+              text: message.body,
+              time: new Intl.DateTimeFormat(locale, {
+                hour: "2-digit",
+                minute: "2-digit",
+              }).format(new Date(message.createdAt)),
+              delivered: true,
+              replyTo: message.reply,
+            }
+          ];
+        }
+        return next;
+      });
       if (received.length) playUiSound("receive");
     }
     void refresh();
@@ -837,17 +845,26 @@ function GroupWorkspace({ locale, profile, session, t }: {
     const reply = replyTo ? createReplyReference(replyTo.id, replyTo.text) : undefined;
     try {
       await sendEncryptedGroupText(profile, session, selected.groupId, text, reply);
-      setMessages((current) => [...current, {
-        id: crypto.randomUUID(),
-        from: "me",
-        text,
-        time: new Intl.DateTimeFormat(locale, {
-          hour: "2-digit",
-          minute: "2-digit",
-        }).format(new Date()),
-        delivered: true,
-        replyTo: reply,
-      }]);
+      setMessagesByGroup((current) => {
+        const groupMessages = current[selected.groupId] || [];
+        return {
+          ...current,
+          [selected.groupId]: [
+            ...groupMessages,
+            {
+              id: crypto.randomUUID(),
+              from: "me",
+              text,
+              time: new Intl.DateTimeFormat(locale, {
+                hour: "2-digit",
+                minute: "2-digit",
+              }).format(new Date()),
+              delivered: true,
+              replyTo: reply,
+            }
+          ]
+        };
+      });
       playUiSound("send");
       setDraft("");
       setReplyTo(undefined);
@@ -1249,6 +1266,9 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   const handleHistoryChange = useCallback(() => {
     setHistoryRevision((current) => current + 1);
   }, []);
+  useEffect(() => {
+    setLastReceivedText(undefined);
+  }, [recipient]);
   useEffect(() => {
     localStorage.setItem("covechat.locale", locale);
     document.documentElement.lang = locale;

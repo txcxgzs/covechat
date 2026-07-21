@@ -13,6 +13,7 @@ import initCrypto, {
   wasm_mls_create_device,
   wasm_signal_create_device,
   wasm_sign_payload,
+  wasm_verify_signature,
 } from "../crypto-wasm/covechat_crypto";
 
 const DATABASE = "covechat-secure";
@@ -418,6 +419,11 @@ export async function signWithDevice(profile: SecureProfile, payload: Uint8Array
 export async function signWithAccount(profile: SecureProfile, payload: Uint8Array): Promise<string> {
   await ensureCrypto();
   return wasm_sign_payload(profile.accountKeys.privateKey, toBase64Url(payload));
+}
+
+export async function verifySignature(publicKey: string, payload: Uint8Array, signature: string): Promise<boolean> {
+  await ensureCrypto();
+  return wasm_verify_signature(publicKey, toBase64Url(payload), signature);
 }
 
 export async function deriveRecoveryKeys(

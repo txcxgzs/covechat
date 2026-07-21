@@ -32,6 +32,7 @@ export const wasm_signal_decrypt: (a: number, b: number, c: number, d: number, e
 export const wasm_signal_encrypt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint) => [number, number, number, number];
 export const wasm_signal_initiate_session: (a: number, b: number, c: number, d: number, e: bigint) => [number, number, number, number];
 export const wasm_signal_refresh_pre_keys: (a: number, b: number, c: bigint) => [number, number, number, number];
+export const wasm_verify_signature: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const __wbindgen_exn_store: (a: number) => void;
 export const __externref_table_alloc: () => number;
 export const __wbindgen_externrefs: WebAssembly.Table;

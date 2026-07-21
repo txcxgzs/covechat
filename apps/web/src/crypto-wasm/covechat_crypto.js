@@ -876,6 +876,26 @@ export function wasm_signal_refresh_pre_keys(state_json, now_millis) {
         wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
 }
+
+/**
+ * @param {string} public_key
+ * @param {string} payload_base64
+ * @param {string} signature_base64
+ * @returns {boolean}
+ */
+export function wasm_verify_signature(public_key, payload_base64, signature_base64) {
+    const ptr0 = passStringToWasm0(public_key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(payload_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(signature_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.wasm_verify_signature(ptr0, len0, ptr1, len1, ptr2, len2);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return ret[0] !== 0;
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

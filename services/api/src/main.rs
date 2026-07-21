@@ -748,6 +748,10 @@ async fn register_device(
     if !verify_device_authorization(account, &device) {
         return StatusCode::UNAUTHORIZED;
     }
+    let device_count = store.devices.values().filter(|d| d.username == device.username).count();
+    if device_count >= 10 {
+        return StatusCode::TOO_MANY_REQUESTS;
+    }
     if store.devices.contains_key(&device.device_id) {
         return StatusCode::CONFLICT;
     }
@@ -1055,7 +1059,7 @@ async fn verify_recovery_challenge(
 async fn store_envelope(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(envelope): Json<EncryptedEnvelope>,
+    Json(mut envelope): Json<EncryptedEnvelope>,
 ) -> StatusCode {
     if headers
         .get("x-idempotency-key")
@@ -1069,6 +1073,7 @@ async fn store_envelope(
     {
         return StatusCode::BAD_REQUEST;
     }
+    envelope.expires_at = envelope.expires_at.min(unix_now() + 30 * 24 * 60 * 60);
     let authenticated = match authenticated_rate_limit(&state, &headers, "envelopes", 120, 60).await
     {
         Ok(device_id) => device_id,
@@ -1095,6 +1100,12 @@ async fn store_envelope(
         .contains(&(recipient_device.username.clone(), sender.username.clone()))
     {
         return StatusCode::FORBIDDEN;
+    }
+    let mailbox = store.envelopes.get(&envelope.recipient_device_id);
+    let message_count = mailbox.map(|m| m.len()).unwrap_or(0);
+    let total_bytes: usize = mailbox.map(|m| m.iter().map(|e| e.ciphertext.len()).sum()).unwrap_or(0);
+    if message_count >= 1000 || total_bytes > 50 * 1024 * 1024 {
+        return StatusCode::INSUFFICIENT_STORAGE;
     }
     let sequence_key = (envelope.sender_device_id, envelope.conversation_id);
     if store
@@ -1275,6 +1286,14 @@ async fn create_attachment(
     if store.attachments.contains_key(&input.object_id) {
         return StatusCode::CONFLICT;
     }
+    let pending_attachments = store
+        .attachments
+        .values()
+        .filter(|object| object.owner_device_id == owner_device_id && !object.finalized)
+        .count();
+    if pending_attachments >= 10 {
+        return StatusCode::TOO_MANY_REQUESTS;
+    }
     let object = AttachmentObject {
         owner_device_id,
         chunk_count: input.chunk_count,
@@ -1332,6 +1351,10 @@ async fn store_attachment_chunk(
         } else {
             StatusCode::CONFLICT
         };
+    }
+    let total_size = object.chunks.values().map(|c| c.ciphertext_size).sum::<u64>() + chunk.ciphertext_size;
+    if total_size > object.ciphertext_size {
+        return StatusCode::PAYLOAD_TOO_LARGE;
     }
     object.chunks.insert(chunk_index, chunk.clone());
     drop(store);

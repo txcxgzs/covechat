@@ -55,14 +55,16 @@ export async function createEncryptedBackup(
     profile.accountKeys.publicKey,
     plaintext,
   );
-  return {
-    protocolVersion: 1,
+  const backup = {
+    protocolVersion: 1 as const,
     version: previous ? previous.version + 1 : 1,
     previousDigest: previous?.ciphertextDigest,
     ciphertext,
     ciphertextDigest: await digest(ciphertext),
     createdAt: Math.floor(Date.now() / 1000),
   };
+  localStorage.setItem(`covechat:backup_version:${profile.username}`, backup.version.toString());
+  return backup;
 }
 
 export type RestoredBackup = {
@@ -94,6 +96,11 @@ export async function decryptBackup(
   if (profile.version !== 1 || profile.recoverySecret !== recoverySecret) {
     throw new Error("invalid backup");
   }
+  const knownVersion = parseInt(localStorage.getItem(`covechat:backup_version:${profile.username}`) || "0", 10);
+  if (backup.version < knownVersion) {
+    throw new Error("backup rollback detected: version older than local anchor");
+  }
+  localStorage.setItem(`covechat:backup_version:${profile.username}`, backup.version.toString());
   return { profile, trustState };
 }
 

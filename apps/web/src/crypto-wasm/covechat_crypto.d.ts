@@ -63,6 +63,8 @@ export function wasm_signal_initiate_session(state_json: string, remote_bundle_j
 
 export function wasm_signal_refresh_pre_keys(state_json: string, now_millis: bigint): string;
 
+export function wasm_verify_signature(public_key: string, payload_base64: string, signature_base64: string): boolean;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -98,6 +100,7 @@ export interface InitOutput {
     readonly wasm_signal_encrypt: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint) => [number, number, number, number];
     readonly wasm_signal_initiate_session: (a: number, b: number, c: number, d: number, e: bigint) => [number, number, number, number];
     readonly wasm_signal_refresh_pre_keys: (a: number, b: number, c: bigint) => [number, number, number, number];
+    readonly wasm_verify_signature: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;

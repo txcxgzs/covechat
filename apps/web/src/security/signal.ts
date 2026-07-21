@@ -18,6 +18,7 @@ import {
   sendEnvelope,
 } from "./api";
 import {
+  loadTrustState,
   saveSignalState,
   type PublishedPreKeyBundle,
   type SecureProfile,
@@ -246,6 +247,15 @@ export async function receiveEncryptedTexts(
       const payload = JSON.parse(
         decoder.decode(fromBase64Url(decrypted.plaintext)),
       ) as SignalPayload;
+      let state = await loadTrustState(profile);
+      if (!state.identities[payload.senderUsername]?.deviceFingerprints[envelope.senderDeviceId]) {
+        const directory = await lookupDirectory(payload.senderUsername, session);
+        await observeAndCheckIdentity(profile, directory);
+        state = await loadTrustState(profile);
+        if (!state.identities[payload.senderUsername]?.deviceFingerprints[envelope.senderDeviceId]) {
+          throw new Error("forged sender username: device not owned by this user");
+        }
+      }
       if (
         payload.version !== 1
         || !Number.isFinite(payload.createdAt)

@@ -2,6 +2,7 @@ import type { DirectoryResponse } from "@covechat/protocol";
 import {
   loadTrustState,
   saveTrustState,
+  verifySignature,
   type PublishedPreKeyBundle,
   type SecureProfile,
   type SignalPreKeyBundle,
@@ -70,6 +71,22 @@ export async function observeAndCheckIdentity(
   directory: DirectoryResponse,
 ): Promise<void> {
   const state = await loadTrustState(profile);
+  for (const device of directory.devices) {
+    if (device.revokedAt) continue;
+    const payload = encoder.encode(JSON.stringify([
+      device.protocolVersion,
+      device.deviceId,
+      device.username,
+      device.signingPublicKey,
+      device.prekeyVersion,
+      device.prekeyBundle,
+      device.createdAt,
+    ]));
+    const valid = await verifySignature(directory.account.signingPublicKey, payload, device.authorizationSignature);
+    if (!valid) {
+      throw new Error(`SECURITY: invalid authorization signature for device ${device.deviceId}`);
+    }
+  }
   const currentDevices = await directoryFingerprints(directory);
   const previous = state.identities[directory.account.username];
   if (previous) {
