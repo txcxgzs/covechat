@@ -748,7 +748,11 @@ async fn register_device(
     if !verify_device_authorization(account, &device) {
         return StatusCode::UNAUTHORIZED;
     }
-    let device_count = store.devices.values().filter(|d| d.username == device.username).count();
+    let device_count = store
+        .devices
+        .values()
+        .filter(|d| d.username == device.username)
+        .count();
     if device_count >= 10 {
         return StatusCode::TOO_MANY_REQUESTS;
     }
@@ -1103,7 +1107,9 @@ async fn store_envelope(
     }
     let mailbox = store.envelopes.get(&envelope.recipient_device_id);
     let message_count = mailbox.map(|m| m.len()).unwrap_or(0);
-    let total_bytes: usize = mailbox.map(|m| m.iter().map(|e| e.ciphertext.len()).sum()).unwrap_or(0);
+    let total_bytes: usize = mailbox
+        .map(|m| m.iter().map(|e| e.ciphertext.len()).sum())
+        .unwrap_or(0);
     if message_count >= 1000 || total_bytes > 50 * 1024 * 1024 {
         return StatusCode::INSUFFICIENT_STORAGE;
     }
@@ -1352,7 +1358,12 @@ async fn store_attachment_chunk(
             StatusCode::CONFLICT
         };
     }
-    let total_size = object.chunks.values().map(|c| c.ciphertext_size).sum::<u64>() + chunk.ciphertext_size;
+    let total_size = object
+        .chunks
+        .values()
+        .map(|c| c.ciphertext_size)
+        .sum::<u64>()
+        + chunk.ciphertext_size;
     if total_size > object.ciphertext_size {
         return StatusCode::PAYLOAD_TOO_LARGE;
     }

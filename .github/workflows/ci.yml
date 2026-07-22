@@ -27,6 +27,7 @@ jobs:
           ALLOWED_ORIGINS=https://chat.example.com \
           docker compose -f compose.deploy.yml config --quiet
       - run: npm run build
+      - run: npm test --workspaces --if-present
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features

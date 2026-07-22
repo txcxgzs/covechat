@@ -143,8 +143,8 @@ pub fn verify_signature(
     let sig_bytes = URL_SAFE_NO_PAD
         .decode(signature_base64)
         .map_err(|_| CryptoError::InvalidInput)?;
-    let sig = ed25519_dalek::Signature::from_slice(&sig_bytes)
-        .map_err(|_| CryptoError::InvalidInput)?;
+    let sig =
+        ed25519_dalek::Signature::from_slice(&sig_bytes).map_err(|_| CryptoError::InvalidInput)?;
     Ok(pk.verify(payload, &sig).is_ok())
 }
 
