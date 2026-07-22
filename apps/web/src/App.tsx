@@ -1,6 +1,6 @@
 import { FormEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BellOff, Check, CheckCheck, CheckCircle2, CircleHelp, Copy as CopyIcon, FileText, FlaskConical, Image,
+  BellOff, Check, CheckCheck, CheckCircle2, CircleHelp, Copy as CopyIcon, FileText, FileWarning, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Palette, Paperclip, Plus, Search, Send,
   Languages, Reply, Settings, ShieldCheck, Smile, Sparkles, Trash2, UserRound, UsersRound, Volume2, VolumeX, X
 } from "lucide-react";
@@ -10,9 +10,11 @@ import { PWA_APPLY_UPDATE_EVENT, PWA_UPDATE_READY_EVENT } from "./pwa-updates";
 import { SecurityGate } from "./security/SecurityGate";
 import { DeploymentGate } from "./deployment/DeploymentGate";
 import { type SecureProfile } from "./security/vault";
+import { deleteLocalVault, saveSecureProfile, unlockSecureProfile } from "./security/vault";
 import type { AttachmentReference, AuthSession, DeviceRecord } from "@covechat/protocol";
 import {
   listBlockedUsers,
+  deleteOwnAccount,
   listOwnDevices,
   lookupDirectory,
   revokeOwnDevice,
@@ -63,7 +65,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-type AppView = "messages" | "groups" | "settings";
+type AppView = "messages" | "groups" | "settings" | "profile";
 type WallpaperStyle = "cove" | "plain" | "midnight";
 const NOOP_SELECT_MESSAGE = () => undefined;
 
@@ -114,7 +116,7 @@ function Navigation({ locale, t, onLocaleChange, profileName, activeView, onView
       <button className="nav-item language" onClick={onLocaleChange} aria-label={t("switchLanguage")}>
         <Languages aria-hidden="true" /><span>{locale === "zh-CN" ? "English" : "中文"}</span>
       </button>
-      <button className="profile" aria-label={t("openProfile")}>
+      <button className={activeView === "profile" ? "profile active" : "profile"} aria-label={t("openProfile")} onClick={() => onViewChange("profile")}>
         <span className="avatar avatar-small">AK</span>
         <span>{profileName ?? t("alexKim")}</span>
         <span className="presence" />
@@ -303,10 +305,11 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
   );
 }
 
-function InteractiveMessage({ locale, message, onReply, onSelect = NOOP_SELECT_MESSAGE, selected = false, selectionMode = false }: {
+function InteractiveMessage({ locale, message, onReply, onReport, onSelect = NOOP_SELECT_MESSAGE, selected = false, selectionMode = false }: {
   locale: Locale;
   message: Message;
   onReply: (message: Message) => void;
+  onReport?: (message: Message) => void;
   onSelect?: (messageId: string) => void;
   selected?: boolean;
   selectionMode?: boolean;
@@ -382,6 +385,7 @@ function InteractiveMessage({ locale, message, onReply, onSelect = NOOP_SELECT_M
           <button onClick={() => { onReply(message); setMenu(undefined); }}><Reply />{isChinese ? "回复" : "Reply"}</button>
           <button onClick={() => { void navigator.clipboard.writeText(message.text); playUiSound("success"); setMenu(undefined); }}><CopyIcon />{isChinese ? "复制" : "Copy"}</button>
           <button onClick={() => { onSelect(message.id); setMenu(undefined); }}><CheckCircle2 />{selected ? (isChinese ? "取消选择" : "Unselect") : (isChinese ? "选择" : "Select")}</button>
+          {message.from === "them" && onReport ? <button className="danger" onClick={() => { onReport(message); setMenu(undefined); }}><FileWarning />{isChinese ? "举报这条消息" : "Report message"}</button> : null}
         </div>
       ) : null}
     </article>
@@ -574,6 +578,13 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
       );
     }
   }
+  async function reportMessage(message: Message) {
+    if (!window.confirm(locale === "zh-CN" ? "举报会把这条消息的明文主动提交给管理员审核。确认继续？" : "Reporting explicitly discloses this message to administrators. Continue?")) return;
+    try {
+      await submitAbuseReport(profile, session, recipient, JSON.stringify({ message: message.text, messageId: message.id }), "user-selected message");
+      setAttachmentStatus(locale === "zh-CN" ? "举报已提交" : "Report submitted");
+    } catch { setAttachmentStatus(locale === "zh-CN" ? "举报提交失败" : "Report submission failed"); }
+  }
   async function uploadAttachment(file: File) {
     if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
       setAttachmentStatus(t("vaultError"));
@@ -668,6 +679,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
           locale={locale}
           message={message}
           onReply={setReplyTo}
+          onReport={reportMessage}
           onSelect={toggleMessageSelection}
           selected={selectedIds.has(message.id)}
           selectionMode={selectedIds.size > 0}
@@ -1244,6 +1256,52 @@ function SettingsWorkspace({ locale, motionEnabled, onMotionChange, onSoundChang
   );
 }
 
+function ProfileWorkspace({ locale, profile, session }: { locale: Locale; profile: SecureProfile; session: AuthSession }) {
+  const zh = locale === "zh-CN";
+  const [devices, setDevices] = useState<DeviceRecord[]>([]);
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [currentPassphrase, setCurrentPassphrase] = useState("");
+  const [newPassphrase, setNewPassphrase] = useState("");
+  const [status, setStatus] = useState("");
+  const backupVersion = localStorage.getItem(`covechat:backup_version:${profile.username}`) ?? "0";
+  const refreshDevices = useCallback(() => void listOwnDevices(session).then(setDevices).catch(() => setStatus(zh ? "设备列表读取失败" : "Unable to load devices")), [session.accessToken, zh]);
+  useEffect(refreshDevices, [refreshDevices]);
+  async function changePassphrase(event: FormEvent) {
+    event.preventDefault();
+    if (newPassphrase.length < 12) { setStatus(zh ? "新口令至少需要 12 个字符" : "New passphrase must be at least 12 characters"); return; }
+    try {
+      const unlocked = await unlockSecureProfile(currentPassphrase);
+      if (unlocked.deviceId !== profile.deviceId) throw new Error("profile mismatch");
+      await saveSecureProfile(profile, newPassphrase);
+      setCurrentPassphrase(""); setNewPassphrase(""); setStatus(zh ? "本地解锁口令已更新" : "Local passphrase updated");
+    } catch { setStatus(zh ? "当前口令错误，未作更改" : "Current passphrase is incorrect"); }
+  }
+  async function removeDevice(deviceId: string) {
+    if (!window.confirm(zh ? "确认撤销这台设备？撤销后它无法登录或接收新消息。" : "Revoke this device?")) return;
+    await revokeOwnDevice(deviceId, session); refreshDevices();
+  }
+  async function clearLocalData() {
+    if (!window.confirm(zh ? "这会删除当前浏览器中的密钥、消息和设置。确认已经保存恢复码？" : "This deletes local keys, messages and settings. Continue?")) return;
+    await deleteLocalVault(); localStorage.clear(); window.location.assign("/");
+  }
+  async function deleteAccount() {
+    const confirmation = window.prompt(zh ? `这是永久操作。输入用户名 ${profile.username} 确认删除服务器账户和所有设备：` : `Permanent action. Type ${profile.username} to delete the server account:`);
+    if (confirmation !== profile.username) return;
+    try { await deleteOwnAccount(profile, session); await deleteLocalVault(); localStorage.clear(); window.location.assign("/"); }
+    catch { setStatus(zh ? "账户删除失败，未清除本机数据" : "Account deletion failed; local data was kept"); }
+  }
+  return <main className="profile-workspace">
+    <header className="settings-heading"><span><UserRound /></span><div><h1>{zh ? "个人与安全" : "Profile & security"}</h1><p>{profile.username} · {profile.deviceId}</p></div></header>
+    <div className="profile-grid">
+      <section className="settings-card"><h2>{zh ? "账户恢复" : "Account recovery"}</h2><p>{zh ? `加密云备份版本：${backupVersion}` : `Encrypted cloud backup version: ${backupVersion}`}</p><Button variant="secondary" onClick={() => setShowRecovery((value) => !value)}>{showRecovery ? (zh ? "隐藏恢复码" : "Hide recovery code") : (zh ? "显示恢复码" : "Show recovery code")}</Button>{showRecovery ? <><code className="recovery-code">{profile.recoverySecret}</code><Button size="small" onClick={() => void navigator.clipboard.writeText(profile.recoverySecret)}>{zh ? "复制恢复码" : "Copy recovery code"}</Button></> : null}</section>
+      <section className="settings-card"><h2>{zh ? "我的设备" : "My devices"}</h2>{devices.map((device) => <div className="profile-device" key={device.deviceId}><div><strong>{device.deviceId === profile.deviceId ? (zh ? "当前设备" : "Current device") : device.deviceId}</strong><small>{new Date(device.createdAt * 1000).toLocaleString(locale)}{device.revokedAt ? ` · ${zh ? "已撤销" : "Revoked"}` : ""}</small></div>{device.deviceId !== profile.deviceId && !device.revokedAt ? <Button size="small" variant="danger" onClick={() => void removeDevice(device.deviceId)}>{zh ? "撤销" : "Revoke"}</Button> : null}</div>)}</section>
+      <section className="settings-card"><h2>{zh ? "修改本地解锁口令" : "Change local passphrase"}</h2><form className="profile-form" onSubmit={changePassphrase}><label>{zh ? "当前口令" : "Current passphrase"}<input type="password" value={currentPassphrase} onChange={(event) => setCurrentPassphrase(event.target.value)} required /></label><label>{zh ? "新口令" : "New passphrase"}<input type="password" minLength={12} value={newPassphrase} onChange={(event) => setNewPassphrase(event.target.value)} required /></label><Button type="submit">{zh ? "更新口令" : "Update passphrase"}</Button></form></section>
+      <section className="settings-card danger-zone"><h2>{zh ? "会话与数据" : "Session & data"}</h2><div><Button variant="secondary" onClick={() => window.location.reload()}>{zh ? "锁定并退出" : "Lock and sign out"}</Button><Button variant="danger" onClick={() => void clearLocalData()}>{zh ? "清除此设备数据" : "Clear this device"}</Button><Button variant="danger" onClick={() => void deleteAccount()}>{zh ? "永久删除账户" : "Permanently delete account"}</Button></div></section>
+      {status ? <p className="profile-status" role="status">{status}</p> : null}
+    </div>
+  </main>;
+}
+
 function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSession }) {
   const [locale, setLocale] = useState<Locale>(detectLocale);
   const t: Translate = (key) => copy[locale][key];
@@ -1332,7 +1390,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
           </>
         ) : activeView === "groups" ? (
           <GroupWorkspace locale={locale} profile={profile} session={session} t={t} />
-        ) : (
+        ) : activeView === "settings" ? (
           <SettingsWorkspace
             locale={locale}
             motionEnabled={motionEnabled}
@@ -1342,6 +1400,8 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
             onSoundChange={(enabled) => { setSoundEnabled(enabled); setUiSoundsEnabled(enabled); }}
             onWallpaperChange={(next) => { setWallpaper(next); localStorage.setItem("covechat-wallpaper", next); }}
           />
+        ) : (
+          <ProfileWorkspace locale={locale} profile={profile} session={session} />
         )}
       </div>
       {noticeOpen ? (

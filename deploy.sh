@@ -88,6 +88,8 @@ MINIO_ROOT_USER=covechat
 MINIO_ROOT_PASSWORD=$(random_secret)
 ALLOWED_ORIGINS=${PUBLIC_ORIGIN}
 COVECHAT_SETUP_TOKEN=$(random_secret)
+COVECHAT_ADMIN_PATH=/manage-$(random_secret | cut -c1-16)
+COVECHAT_ADMIN_TOKEN=$(random_secret)
 EOF
   chmod 600 .env
   echo "[OK] 已生成 .env（权限 0600）/ Generated private .env."
@@ -116,6 +118,13 @@ if ! grep -q '^COVECHAT_SETUP_TOKEN=' .env; then
   printf '\nCOVECHAT_SETUP_TOKEN=%s\n' "$(random_secret)" >> .env
   chmod 600 .env
 fi
+if ! grep -q '^COVECHAT_ADMIN_PATH=' .env; then
+  printf '\nCOVECHAT_ADMIN_PATH=/manage-%s\n' "$(random_secret | cut -c1-16)" >> .env
+fi
+if ! grep -q '^COVECHAT_ADMIN_TOKEN=' .env; then
+  printf '\nCOVECHAT_ADMIN_TOKEN=%s\n' "$(random_secret)" >> .env
+fi
+chmod 600 .env
 
 set -a
 # shellcheck disable=SC1091
@@ -146,6 +155,8 @@ CoveChat 已启动 / CoveChat is running
   状态 / Status: docker compose --env-file .env -f compose.deploy.yml ps
   日志 / Logs:   docker compose --env-file .env -f compose.deploy.yml logs -f
   更新 / Update: ./update.sh
+  管理后台 / Admin: ${ALLOWED_ORIGINS:-http://${COVECHAT_HTTP_HOST:-127.0.0.1}:${COVECHAT_HTTP_PORT:-8088}}${COVECHAT_ADMIN_PATH}
+  管理令牌 / Admin token: ${COVECHAT_ADMIN_TOKEN}
 EOF
 
 if [[ -z "${ALLOWED_ORIGINS:-}" ]]; then

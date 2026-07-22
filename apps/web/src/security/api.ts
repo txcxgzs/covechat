@@ -197,6 +197,13 @@ export async function setUserBlocked(
   if (!response.ok) throw new Error(`block update failed: ${response.status}`);
 }
 
+export async function deleteOwnAccount(profile: SecureProfile, session: AuthSession): Promise<void> {
+  const createdAt = Math.floor(Date.now() / 1000);
+  const signature = await signWithAccount(profile, encoder.encode(JSON.stringify([1, "delete-account", profile.username, createdAt])));
+  const response = await fetch("/api/v1/account", { method: "DELETE", headers: { "content-type": "application/json", authorization: `Bearer ${session.accessToken}` }, body: JSON.stringify({ username: profile.username, createdAt, signature }) });
+  if (!response.ok) throw new Error(`account deletion failed: ${response.status}`);
+}
+
 export async function submitAbuseReport(
   profile: SecureProfile,
   session: AuthSession,

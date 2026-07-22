@@ -474,6 +474,7 @@ fn router(state: AppState) -> Router {
         .route("/v1/setup/status", get(setup_status))
         .route("/v1/setup", post(complete_setup))
         .route("/v1/onboarding", post(onboard_account))
+        .route("/v1/account", delete(delete_account))
         .route("/v1/devices", get(list_devices).post(register_device))
         .route("/v1/devices/{device_id}/prekeys", put(update_prekeys))
         .route("/v1/devices/{device_id}/revoke", post(revoke_device))
@@ -493,6 +494,23 @@ fn router(state: AppState) -> Router {
         .route("/v1/backups/latest", get(read_latest_backup))
         .route("/v1/backups", put(store_backup))
         .route("/v1/reports", post(create_abuse_report))
+        .route("/v1/management/overview", get(admin_overview))
+        .route("/v1/management/accounts", get(admin_accounts))
+        .route("/v1/management/devices", get(admin_devices))
+        .route("/v1/management/reports", get(admin_reports))
+        .route("/v1/management/audit", get(admin_audit_log))
+        .route(
+            "/v1/management/reports/{report_id}/resolve",
+            post(admin_resolve_report),
+        )
+        .route(
+            "/v1/management/accounts/{username}/suspension",
+            post(admin_set_suspension).delete(admin_clear_suspension),
+        )
+        .route(
+            "/v1/management/devices/{device_id}/revoke",
+            post(admin_revoke_device),
+        )
         .route("/v1/blocks", get(list_blocks))
         .route(
             "/v1/blocks/{username}",
@@ -534,6 +552,354 @@ async fn health() -> Json<serde_json::Value> {
         "securityStatus": "experimental-unaudited",
         "plaintextAccepted": false
     }))
+}
+
+fn admin_authorized(headers: &HeaderMap) -> bool {
+    let Ok(expected) = env::var("COVECHAT_ADMIN_TOKEN") else {
+        return false;
+    };
+    if expected.len() < 32 {
+        return false;
+    }
+    let Some(provided) = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    else {
+        return false;
+    };
+    admin_token_matches(&expected, provided)
+}
+
+fn admin_token_matches(expected: &str, provided: &str) -> bool {
+    let expected_hash = Sha256::digest(expected.as_bytes());
+    let provided_hash = Sha256::digest(provided.as_bytes());
+    expected_hash
+        .as_slice()
+        .ct_eq(provided_hash.as_slice())
+        .into()
+}
+
+fn admin_database(state: &AppState, headers: &HeaderMap) -> Result<Persistence, StatusCode> {
+    if !admin_authorized(headers) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    state
+        .persistence
+        .clone()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)
+}
+
+async fn admin_overview(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let database = match admin_database(&state, &headers) {
+        Ok(value) => value,
+        Err(code) => return code.into_response(),
+    };
+    match database.admin_overview().await {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn admin_accounts(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let database = match admin_database(&state, &headers) {
+        Ok(value) => value,
+        Err(code) => return code.into_response(),
+    };
+    match database.admin_accounts().await {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn admin_devices(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if let Err(code) = admin_database(&state, &headers) {
+        return code.into_response();
+    }
+    let store = state.inner.lock().await;
+    Json(store.devices.values().map(|device| serde_json::json!({
+        "deviceId": device.device_id, "username": device.username, "createdAt": device.created_at,
+        "revokedAt": device.revoked_at, "prekeyVersion": device.prekey_version,
+    })).collect::<Vec<_>>()).into_response()
+}
+
+async fn admin_revoke_device(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(device_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let database = match admin_database(&state, &headers) {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
+    let updated = {
+        let mut store = state.inner.lock().await;
+        let Some(device) = store.devices.get_mut(&device_id) else {
+            return StatusCode::NOT_FOUND;
+        };
+        if device.revoked_at.is_some() {
+            return StatusCode::NO_CONTENT;
+        }
+        device.revoked_at = Some(unix_now());
+        let updated = device.clone();
+        store
+            .sessions
+            .retain(|_, session| session.device_id != device_id);
+        updated
+    };
+    if database.update_device(&updated).await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    let _ = database
+        .admin_audit(
+            "device.revoke",
+            &device_id.to_string(),
+            serde_json::json!({"username": updated.username}),
+        )
+        .await;
+    StatusCode::NO_CONTENT
+}
+
+async fn admin_reports(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let database = match admin_database(&state, &headers) {
+        Ok(value) => value,
+        Err(code) => return code.into_response(),
+    };
+    match database.admin_reports().await {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn admin_audit_log(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let database = match admin_database(&state, &headers) {
+        Ok(value) => value,
+        Err(code) => return code.into_response(),
+    };
+    match database.admin_audit_log().await {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminResolution {
+    status: String,
+    note: String,
+}
+
+async fn admin_resolve_report(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(report_id): Path<Uuid>,
+    Json(input): Json<AdminResolution>,
+) -> impl IntoResponse {
+    let database = match admin_database(&state, &headers) {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
+    if !matches!(input.status.as_str(), "resolved" | "dismissed") || input.note.len() > 2000 {
+        return StatusCode::BAD_REQUEST;
+    }
+    match database
+        .admin_resolve_report(report_id, &input.status, &input.note)
+        .await
+    {
+        Ok(true) => {
+            let _ = database
+                .admin_audit(
+                    "report.resolve",
+                    &report_id.to_string(),
+                    serde_json::json!({"status": input.status, "note": input.note}),
+                )
+                .await;
+            StatusCode::NO_CONTENT
+        }
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminSuspension {
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteAccountRequest {
+    username: String,
+    created_at: u64,
+    signature: String,
+}
+
+async fn delete_account(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<DeleteAccountRequest>,
+) -> impl IntoResponse {
+    if !valid_username(&input.username) || unix_now().abs_diff(input.created_at) > 300 {
+        return StatusCode::BAD_REQUEST;
+    }
+    let (account, owned_devices, attachments) = {
+        let mut store = state.inner.lock().await;
+        let Some(device_id) = authenticated_device(&headers, &mut store) else {
+            return StatusCode::UNAUTHORIZED;
+        };
+        let Some(device) = store.devices.get(&device_id) else {
+            return StatusCode::UNAUTHORIZED;
+        };
+        if device.username != input.username {
+            return StatusCode::FORBIDDEN;
+        }
+        let Some(account) = store.accounts.get(&input.username).cloned() else {
+            return StatusCode::NOT_FOUND;
+        };
+        let owned_devices = store
+            .devices
+            .values()
+            .filter(|item| item.username == input.username)
+            .map(|item| item.device_id)
+            .collect::<HashSet<_>>();
+        let attachments = store
+            .attachments
+            .iter()
+            .filter(|(_, object)| owned_devices.contains(&object.owner_device_id))
+            .map(|(id, object)| (*id, object.chunk_count))
+            .collect::<Vec<_>>();
+        (account, owned_devices, attachments)
+    };
+    let payload = serde_json::to_vec(&(
+        PROTOCOL_VERSION,
+        "delete-account",
+        &input.username,
+        input.created_at,
+    ))
+    .unwrap_or_default();
+    if !verify_signature(&account.signing_public_key, &payload, &input.signature) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    let Some(database) = &state.persistence else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    if database
+        .admin_audit(
+            "account.delete",
+            &input.username,
+            serde_json::json!({"deviceCount": owned_devices.len()}),
+        )
+        .await
+        .is_err()
+        || database.delete_account(&input.username).await.is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    if let Some(object_store) = &state.object_store {
+        for (object_id, chunk_count) in &attachments {
+            let _ = object_store
+                .delete_attachment(*object_id, *chunk_count)
+                .await;
+        }
+    }
+    let mut store = state.inner.lock().await;
+    store.accounts.remove(&input.username);
+    store.devices.retain(|id, _| !owned_devices.contains(id));
+    store
+        .challenges
+        .retain(|_, challenge| !owned_devices.contains(&challenge.device_id));
+    store
+        .sessions
+        .retain(|_, session| !owned_devices.contains(&session.device_id));
+    store
+        .recovery_challenges
+        .retain(|_, challenge| challenge.username != input.username);
+    store
+        .recovery_sessions
+        .retain(|_, session| session.username != input.username);
+    store.envelopes.retain(|id, _| !owned_devices.contains(id));
+    store
+        .last_sequence
+        .retain(|(sender, _), _| !owned_devices.contains(sender));
+    store.backups.remove(&input.username);
+    store
+        .attachments
+        .retain(|id, _| !attachments.iter().any(|(owned_id, _)| owned_id == id));
+    store
+        .abuse_reports
+        .retain(|_, report| !owned_devices.contains(&report.reporter_device_id));
+    store
+        .blocks
+        .retain(|(blocker, blocked)| blocker != &input.username && blocked != &input.username);
+    StatusCode::NO_CONTENT
+}
+
+async fn admin_set_suspension(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+    Json(input): Json<AdminSuspension>,
+) -> impl IntoResponse {
+    let database = match admin_database(&state, &headers) {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
+    if !valid_username(&username) || input.reason.trim().is_empty() || input.reason.len() > 500 {
+        return StatusCode::BAD_REQUEST;
+    }
+    match database
+        .admin_suspend_account(&username, input.reason.trim(), true)
+        .await
+    {
+        Ok(true) => {
+            let device_ids = state
+                .inner
+                .lock()
+                .await
+                .devices
+                .values()
+                .filter(|device| device.username == username)
+                .map(|device| device.device_id)
+                .collect::<HashSet<_>>();
+            state
+                .inner
+                .lock()
+                .await
+                .sessions
+                .retain(|_, session| !device_ids.contains(&session.device_id));
+            let _ = database
+                .admin_audit(
+                    "account.suspend",
+                    &username,
+                    serde_json::json!({"reason": input.reason}),
+                )
+                .await;
+            StatusCode::NO_CONTENT
+        }
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn admin_clear_suspension(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    let database = match admin_database(&state, &headers) {
+        Ok(value) => value,
+        Err(code) => return code,
+    };
+    match database.admin_suspend_account(&username, "", false).await {
+        Ok(true) => {
+            let _ = database
+                .admin_audit("account.unsuspend", &username, serde_json::json!({}))
+                .await;
+            StatusCode::NO_CONTENT
+        }
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 #[derive(Serialize)]
@@ -998,13 +1364,23 @@ async fn create_challenge(
     {
         return (StatusCode::TOO_MANY_REQUESTS, Json(None));
     }
-    let mut store = state.inner.lock().await;
-    let Some(device) = store.devices.get(&device_id) else {
+    let store = state.inner.lock().await;
+    let Some(device) = store.devices.get(&device_id).cloned() else {
         return (StatusCode::NOT_FOUND, Json(None));
     };
     if device.revoked_at.is_some() {
         return (StatusCode::FORBIDDEN, Json(None));
     }
+    drop(store);
+    if let Some(database) = &state.persistence
+        && database
+            .account_suspended(&device.username)
+            .await
+            .unwrap_or(true)
+    {
+        return (StatusCode::FORBIDDEN, Json(None));
+    }
+    let mut store = state.inner.lock().await;
     let mut bytes = [0_u8; 32];
     if getrandom::fill(&mut bytes).is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(None));
@@ -3133,5 +3509,16 @@ mod tests {
         // 无 Redis → 限流放行；device_id 已注册 → 返回 CREATED（挑战已创建）
         let (status, _) = create_challenge(State(state), Path(device_id), headers).await;
         assert_eq!(status, StatusCode::CREATED);
+    }
+
+    #[test]
+    fn admin_token_requires_exact_secret() {
+        let secret = "9wL7j80bwK0v2N8zQ4L5f1dU7pR3mX6c";
+        assert!(admin_token_matches(secret, secret));
+        assert!(!admin_token_matches(
+            secret,
+            "9wL7j80bwK0v2N8zQ4L5f1dU7pR3mX6d"
+        ));
+        assert!(!admin_token_matches(secret, ""));
     }
 }

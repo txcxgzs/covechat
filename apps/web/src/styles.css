@@ -262,6 +262,65 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
   --motion-spring: cubic-bezier(.2, .82, .2, 1);
 }
 body { overflow: hidden; background: #eef3f6; }
+.admin-login { min-height: 100vh; display: grid; place-items: center; padding: 20px; background: radial-gradient(circle at top, #174a64, #071d31 62%); }
+.admin-login form { width: min(430px, 100%); display: grid; gap: 16px; padding: 34px; border-radius: 20px; background: white; box-shadow: 0 30px 90px #00101f80; }
+.admin-login form > svg { width: 42px; height: 42px; color: var(--teal); }
+.admin-login h1, .admin-login p { margin: 0; }
+.admin-login p { color: var(--muted); line-height: 1.55; }
+.admin-login p[role="alert"] { color: var(--warning); }
+.admin-login label { display: grid; gap: 7px; font-weight: 700; }
+.admin-login input { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.admin-login a { color: var(--teal); text-align: center; text-decoration: none; }
+.admin-shell { height: 100vh; display: grid; grid-template-columns: 235px minmax(0, 1fr); color: #173047; background: #f3f7f9; }
+.admin-shell > aside { display: flex; flex-direction: column; gap: 7px; padding: 22px 14px; color: white; background: linear-gradient(180deg, #0b2d48, #071d31); }
+.admin-brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 24px; font-size: 19px; font-weight: 800; }
+.admin-brand svg { width: 26px; color: var(--teal-bright); }
+.admin-shell > aside button { display: flex; align-items: center; gap: 10px; padding: 12px; border: 0; border-radius: 10px; color: #d6e4eb; background: transparent; text-align: left; }
+.admin-shell > aside button svg { width: 18px; }
+.admin-shell > aside button.active, .admin-shell > aside button:hover { color: white; background: #ffffff17; }
+.admin-shell > aside button:last-child { margin-top: auto; }
+.admin-shell > main { min-width: 0; overflow: auto; padding: 30px clamp(20px, 4vw, 54px); }
+.admin-shell > main > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.admin-shell > main > header span { color: var(--teal); font-size: 11px; font-weight: 800; letter-spacing: .14em; }
+.admin-shell h1 { margin: 3px 0 0; font-size: 30px; }
+.admin-error { padding: 12px 15px; border-radius: 10px; color: #9c2f35; background: #fff0f1; }
+.admin-metrics { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 16px; }
+.admin-metrics article { display: grid; gap: 12px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 8px 30px #1730470a; }
+.admin-metrics span { color: var(--muted); }
+.admin-metrics strong { font-size: 34px; }
+.admin-table { overflow: auto; border: 1px solid var(--line); border-radius: 16px; background: white; }
+.admin-table table { width: 100%; border-collapse: collapse; }
+.admin-table th, .admin-table td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.admin-table th { color: var(--muted); background: #f8fafb; font-size: 12px; }
+.admin-table code { white-space: normal; overflow-wrap: anywhere; }
+.admin-stack { display: grid; gap: 16px; }
+.admin-stack > h2 { margin: 8px 0 0; }
+.admin-cards { display: grid; gap: 14px; }
+.admin-cards > article { padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: white; }
+.admin-cards article > header, .admin-cards article > footer { display: flex; align-items: center; gap: 10px; }
+.admin-cards article > header { justify-content: space-between; }
+.admin-cards time { color: var(--muted); font-size: 12px; }
+.admin-cards pre { max-height: 180px; overflow: auto; padding: 12px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f7f8; }
+.admin-status { margin-right: auto; padding: 4px 9px; border-radius: 12px; color: #8a5c13; background: #fff0c9; }
+.admin-status.resolved { color: #24724d; background: #e4f3ec; }
+.admin-status.dismissed { color: var(--muted); background: #edf1f3; }
+.admin-empty { padding: 60px; color: var(--muted); text-align: center; }
+.profile-workspace { grid-column: 2 / -1; min-width: 0; overflow-y: auto; background: #f5f8fa; }
+.profile-grid { width: min(960px, calc(100% - 40px)); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0 auto 40px; }
+.profile-grid .settings-card { align-content: start; }
+.profile-grid h2 { margin: 0 0 8px; }
+.profile-grid p { color: var(--muted); }
+.profile-device { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.profile-device > div { min-width: 0; display: grid; gap: 3px; flex: 1; }
+.profile-device strong { overflow: hidden; text-overflow: ellipsis; }
+.profile-device small { color: var(--muted); }
+.profile-form { display: grid; gap: 12px; }
+.profile-form label { display: grid; gap: 6px; font-weight: 700; }
+.profile-form input { padding: 11px; border: 1px solid var(--line); border-radius: 9px; }
+.danger-zone { border-color: #efcbcd !important; }
+.danger-zone > div { display: flex; gap: 10px; flex-wrap: wrap; }
+.profile-status { grid-column: 1 / -1; padding: 12px 15px; border-radius: 10px; color: #176466 !important; background: #e3f4f2; }
+@media (max-width: 760px) { .admin-shell { grid-template-columns: 68px minmax(0, 1fr); } .admin-brand { justify-content: center; padding-inline: 0; font-size: 0; } .admin-shell > aside button { justify-content: center; font-size: 0; } .admin-metrics { grid-template-columns: repeat(2, 1fr); } }
 .app { height: 100vh; }
 .workspace {
   height: 100%;
@@ -574,6 +633,8 @@ body { overflow: hidden; background: #eef3f6; }
 .message-menu button { min-height: 38px; padding: 0 10px; display: flex; align-items: center; gap: 11px; border: 0; border-radius: 9px; color: #18354c; background: transparent; font-size: var(--font-14); text-align: left; transition: background-color .12s ease, transform .12s ease; }
 .message-menu button:hover { background: #e8f5f5; transform: translateX(2px); }
 .message-menu button svg { width: 18px; color: var(--teal); }
+.message-menu button.danger { color: #b13a43; }
+.message-menu button.danger svg { color: #b13a43; }
 .reply-preview { min-width: 0; min-height: 50px; padding: 7px 8px 5px 14px; display: grid; grid-template-columns: 28px minmax(0, 1fr) 36px; align-items: center; gap: 8px; border-bottom: 1px solid #edf1f3; color: var(--teal); animation: reply-expand .25s cubic-bezier(.4, 0, .2, 1) both; }
 .reply-preview > svg { width: 19px; }
 .reply-preview > span { min-width: 0; display: grid; gap: 1px; }

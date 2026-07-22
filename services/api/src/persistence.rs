@@ -15,6 +15,162 @@ pub struct Persistence {
 }
 
 impl Persistence {
+    pub async fn admin_overview(&self) -> anyhow::Result<serde_json::Value> {
+        let row = sqlx::query(
+            "SELECT
+              (SELECT count(*) FROM accounts) AS accounts,
+              (SELECT count(*) FROM devices WHERE revoked_at IS NULL) AS active_devices,
+              (SELECT count(*) FROM abuse_reports WHERE status = 'pending') AS pending_reports,
+              (SELECT count(*) FROM account_suspensions) AS suspended_accounts",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(serde_json::json!({
+            "accounts": row.get::<i64, _>("accounts"),
+            "activeDevices": row.get::<i64, _>("active_devices"),
+            "pendingReports": row.get::<i64, _>("pending_reports"),
+            "suspendedAccounts": row.get::<i64, _>("suspended_accounts"),
+        }))
+    }
+
+    pub async fn admin_accounts(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = sqlx::query(
+            "SELECT a.username, extract(epoch from a.created_at)::bigint AS created_at, count(d.device_id) AS device_count,
+                    count(d.device_id) FILTER (WHERE d.revoked_at IS NULL) AS active_devices,
+                    s.reason AS suspension_reason
+             FROM accounts a LEFT JOIN devices d ON d.username = a.username
+             LEFT JOIN account_suspensions s ON s.username = a.username
+             GROUP BY a.username, a.created_at, s.reason ORDER BY a.created_at DESC LIMIT 500"
+        ).fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "username": row.get::<String, _>("username"),
+                    "createdAt": row.get::<i64, _>("created_at"),
+                    "deviceCount": row.get::<i64, _>("device_count"),
+                    "activeDevices": row.get::<i64, _>("active_devices"),
+                    "suspended": row.get::<Option<String>, _>("suspension_reason").is_some(),
+                    "suspensionReason": row.get::<Option<String>, _>("suspension_reason"),
+                })
+            })
+            .collect())
+    }
+
+    pub async fn admin_reports(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = sqlx::query(
+            "SELECT report_id, reported_username, payload, status, resolution_note,
+                    extract(epoch from created_at)::bigint AS created_at,
+                    extract(epoch from resolved_at)::bigint AS resolved_at
+             FROM abuse_reports ORDER BY created_at DESC LIMIT 500",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                serde_json::json!({
+                    "reportId": row.get::<Uuid, _>("report_id"),
+                    "reportedUsername": row.get::<String, _>("reported_username"),
+                    "payload": row.get::<serde_json::Value, _>("payload"),
+                    "status": row.get::<String, _>("status"),
+                    "resolutionNote": row.get::<Option<String>, _>("resolution_note"),
+                    "createdAt": row.get::<i64, _>("created_at"),
+                    "resolvedAt": row.get::<Option<i64>, _>("resolved_at"),
+                })
+            })
+            .collect())
+    }
+
+    pub async fn admin_resolve_report(
+        &self,
+        report_id: Uuid,
+        status: &str,
+        note: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE abuse_reports SET status = $2, resolution_note = $3, resolved_at = now()
+             WHERE report_id = $1",
+        )
+        .bind(report_id)
+        .bind(status)
+        .bind(note)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn admin_suspend_account(
+        &self,
+        username: &str,
+        reason: &str,
+        suspended: bool,
+    ) -> anyhow::Result<bool> {
+        let exists = sqlx::query("SELECT 1 FROM accounts WHERE username = $1")
+            .bind(username)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some();
+        if !exists {
+            return Ok(false);
+        }
+        if suspended {
+            sqlx::query("INSERT INTO account_suspensions(username, reason) VALUES ($1, $2) ON CONFLICT(username) DO UPDATE SET reason = EXCLUDED.reason, created_at = now()")
+                .bind(username).bind(reason).execute(&self.pool).await?;
+        } else {
+            sqlx::query("DELETE FROM account_suspensions WHERE username = $1")
+                .bind(username)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(true)
+    }
+
+    pub async fn account_suspended(&self, username: &str) -> anyhow::Result<bool> {
+        Ok(
+            sqlx::query("SELECT 1 FROM account_suspensions WHERE username = $1")
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await?
+                .is_some(),
+        )
+    }
+
+    pub async fn admin_audit(
+        &self,
+        action: &str,
+        target: &str,
+        detail: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO admin_audit_log(audit_id, action, target, detail) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(action)
+        .bind(target)
+        .bind(detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn admin_audit_log(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = sqlx::query("SELECT audit_id, action, target, detail, extract(epoch from created_at)::bigint AS created_at FROM admin_audit_log ORDER BY created_at DESC LIMIT 500")
+            .fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|row| serde_json::json!({
+            "auditId": row.get::<Uuid, _>("audit_id"), "action": row.get::<String, _>("action"),
+            "target": row.get::<String, _>("target"), "detail": row.get::<serde_json::Value, _>("detail"),
+            "createdAt": row.get::<i64, _>("created_at"),
+        })).collect())
+    }
+
+    pub async fn delete_account(&self, username: &str) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM accounts WHERE username = $1")
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
     pub async fn connect_from_env() -> anyhow::Result<Option<Self>> {
         let Ok(database_url) = std::env::var("DATABASE_URL") else {
             return Ok(None);

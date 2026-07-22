@@ -25,6 +25,14 @@ while (($#)); do
 done
 
 [[ -f .env ]] || { echo ".env 不存在，请先运行 ./deploy.sh" >&2; exit 1; }
+random_secret() {
+  if command -v openssl >/dev/null 2>&1; then openssl rand -base64 36 | tr '+/' '-_' | tr -d '=\n';
+  else head -c 36 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'; fi
+}
+if ! grep -q '^COVECHAT_ADMIN_PATH=' .env; then printf '\nCOVECHAT_ADMIN_PATH=/manage-%s\n' "$(random_secret | cut -c1-16)" >> .env; fi
+if ! grep -q '^COVECHAT_ADMIN_TOKEN=' .env; then printf '\nCOVECHAT_ADMIN_TOKEN=%s\n' "$(random_secret)" >> .env; fi
+chmod 600 .env
+
 command -v git >/dev/null 2>&1 || { echo "git is required" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 DOCKER=(docker)

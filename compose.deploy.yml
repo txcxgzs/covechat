@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        VITE_ADMIN_PATH: "${COVECHAT_ADMIN_PATH:?COVECHAT_ADMIN_PATH is required}"
     restart: unless-stopped
     ports:
       - "${COVECHAT_HTTP_HOST:-127.0.0.1}:${COVECHAT_HTTP_PORT:-8088}:80"
@@ -32,6 +34,7 @@ services:
       # Optional when the browser setup wizard persists the public origin.
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-}"
       COVECHAT_SETUP_TOKEN: "${COVECHAT_SETUP_TOKEN:?COVECHAT_SETUP_TOKEN is required}"
+      COVECHAT_ADMIN_TOKEN: "${COVECHAT_ADMIN_TOKEN:?COVECHAT_ADMIN_TOKEN is required}"
     expose: ["8080"]
     depends_on:
       postgres:
