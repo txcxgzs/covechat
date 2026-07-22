@@ -209,8 +209,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .group-invite button { white-space: nowrap; }
 .group-composer { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .group-composer .send { width: 44px; height: 44px; }
-.group-empty { display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--muted); }
-.group-empty svg { width: 42px; height: 42px; color: var(--teal); }
+.group-empty { grid-row: 1 / -1; align-self: center; justify-self: center; width: min(520px, calc(100% - 40px)); display: grid; justify-items: center; gap: 12px; padding: clamp(28px, 5vw, 52px); border: 1px solid #d9e7ec; border-radius: 24px; color: var(--muted); background: #ffffffd9; box-shadow: 0 20px 60px #17304712; text-align: center; backdrop-filter: blur(12px); }
+.group-empty-icon { width: 74px; height: 74px; display: grid; place-items: center; border-radius: 24px; color: var(--teal); background: linear-gradient(145deg, #e4f7f5, #d9edf3); box-shadow: 0 12px 30px #159b9a20; }
+.group-empty-icon svg { width: 36px; height: 36px; }
+.group-empty h2 { margin: 2px 0 0; color: #173047; font-size: clamp(22px, 3vw, 30px); letter-spacing: -.025em; }
+.group-empty > p { max-width: 430px; margin: 0; line-height: 1.65; }
+.group-empty ol { width: min(360px, 100%); display: grid; gap: 8px; margin: 4px 0 8px; padding: 0; list-style: none; counter-reset: group-steps; text-align: left; }
+.group-empty li { counter-increment: group-steps; display: flex; align-items: center; gap: 10px; color: #466173; }
+.group-empty li::before { content: counter(group-steps); width: 25px; height: 25px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: #0d7777; background: var(--teal-soft); font-size: 12px; font-weight: 800; }
+.group-list-empty { margin: 4px 12px; padding: 14px; border-radius: 12px; color: var(--muted); background: #f6f9fa; line-height: 1.5; text-align: center; }
 
 /* === 群管理面板：成员列表、邀请策略、退出群组 === */
 .group-admin-panel { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--teal-soft); font-size: 13px; }

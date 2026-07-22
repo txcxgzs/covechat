@@ -760,6 +760,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
   const [replyTo, setReplyTo] = useState<Message>();
   const [emojiOpen, setEmojiOpen] = useState(false);
   const groupTextInput = useRef<HTMLTextAreaElement>(null);
+  const groupNameInput = useRef<HTMLInputElement>(null);
   const selected = availableGroups.find((group) => group.groupId === selectedGroupId);
   const messages = selected ? messagesByGroup[selected.groupId] || [] : [];
   // 当前设备是否为该群管理员（控制移除成员、邀请策略等管理 UI 的可见性）
@@ -956,6 +957,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
         </header>
         <form className="group-create" onSubmit={(event) => void createGroup(event)}>
           <input
+            ref={groupNameInput}
             aria-label={t("groupName")}
             placeholder={t("groupName")}
             required
@@ -979,7 +981,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
               </span>
             </button>
           ))}
-          {availableGroups.length === 0 ? <p>{t("noGroups")}</p> : null}
+          {availableGroups.length === 0 ? <p className="group-list-empty">{locale === "zh-CN" ? "创建后，群组会显示在这里" : "Your groups will appear here after creation"}</p> : null}
         </div>
       </aside>
       <section className="group-chat">
@@ -1034,7 +1036,20 @@ function GroupWorkspace({ locale, profile, session, t }: {
               {emojiOpen ? <EmojiPicker label={t("chooseEmoji")} onPick={insertGroupEmoji} /> : null}
             </form>
           </>
-        ) : <div className="group-empty"><UsersRound /><p>{t("selectGroup")}</p></div>}
+        ) : (
+          <div className="group-empty">
+            <span className="group-empty-icon"><UsersRound /></span>
+            <span className="eyeline">{t("mlsProtocol")}</span>
+            <h2>{locale === "zh-CN" ? "创建你的第一个加密群组" : "Create your first encrypted group"}</h2>
+            <p>{locale === "zh-CN" ? "群组消息使用 MLS 端到端加密。先为群组命名，创建后即可邀请成员并开始聊天。" : "Group messages use MLS end-to-end encryption. Name the group, then invite members and start chatting."}</p>
+            <ol>
+              <li>{locale === "zh-CN" ? "输入群组名称" : "Enter a group name"}</li>
+              <li>{locale === "zh-CN" ? "创建并邀请成员" : "Create it and invite members"}</li>
+              <li>{locale === "zh-CN" ? "核对成员后开始聊天" : "Verify members and start chatting"}</li>
+            </ol>
+            <Button icon={<Plus />} onClick={() => groupNameInput.current?.focus()}>{t("createGroup")}</Button>
+          </div>
+        )}
       </section>
       {selected ? (
         <aside className={`group-details ${detailsOpen ? "open" : ""}`} aria-hidden={!detailsOpen}>
