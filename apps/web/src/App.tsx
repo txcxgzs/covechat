@@ -1251,6 +1251,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
     false,
   );
   const [noticeOpen, setNoticeOpen] = useState(true);
+  const [securityModelOpen, setSecurityModelOpen] = useState(false);
   const [updateReady, setUpdateReady] = useState(false);
   const [activeView, setActiveView] = useState<AppView>("messages");
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
@@ -1282,6 +1283,14 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
     window.addEventListener(PWA_UPDATE_READY_EVENT, showUpdate);
     return () => window.removeEventListener(PWA_UPDATE_READY_EVENT, showUpdate);
   }, []);
+  useEffect(() => {
+    if (!securityModelOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSecurityModelOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [securityModelOpen]);
   return (
     <div className={`app wallpaper-${wallpaper} ${motionEnabled ? "" : "motion-disabled"}`}>
       <div className={`${detailsOpen ? "workspace security-open" : "workspace"} ${mobilePanelOpen ? "mobile-panel-open" : ""}`}>
@@ -1339,9 +1348,28 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
         <aside className="preview-notice">
           <FlaskConical />
           <div><strong>{t("experimentalPreview")}</strong><span>{t("notAudited")}</span></div>
-          <a href="/security">{t("readSecurityModel")}</a>
+          <button className="notice-action" onClick={() => setSecurityModelOpen(true)}>{t("readSecurityModel")}</button>
           <button className="icon-button" onClick={() => setNoticeOpen(false)} aria-label={t("dismissNotice")}><X /></button>
         </aside>
+      ) : null}
+      {securityModelOpen ? (
+        <div className="security-model-backdrop" role="presentation" onMouseDown={() => setSecurityModelOpen(false)}>
+          <section className="security-model-dialog" role="dialog" aria-modal="true" aria-labelledby="security-model-title" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div className="security-model-icon"><ShieldCheck aria-hidden="true" /></div>
+              <div><span>{t("experimentalPreview")}</span><h2 id="security-model-title">{t("securityModelTitle")}</h2></div>
+              <IconButton aria-label={t("closeSecurityModel")} onClick={() => setSecurityModelOpen(false)}><X /></IconButton>
+            </header>
+            <p className="security-model-lead">{t("securityModelLead")}</p>
+            <div className="security-model-grid">
+              <article><LockKeyhole /><div><strong>{t("securityModelProtects")}</strong><p>{t("securityModelProtectsBody")}</p></div></article>
+              <article><ShieldCheck /><div><strong>{t("securityModelLimits")}</strong><p>{t("securityModelLimitsBody")}</p></div></article>
+              <article><CheckCircle2 /><div><strong>{t("safetyNumberMeaning")}</strong><p>{t("safetyNumberMeaningBody")}</p></div></article>
+            </div>
+            <aside className="security-model-warning"><FlaskConical /><span>{t("notAudited")}</span></aside>
+            <Button onClick={() => setSecurityModelOpen(false)}>{t("understood")}</Button>
+          </section>
+        </div>
       ) : null}
       {updateReady ? (
         <aside className="preview-notice update-notice" role="status">

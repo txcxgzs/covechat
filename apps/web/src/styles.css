@@ -186,7 +186,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .preview-notice div { display: grid; gap: 3px; }
 .preview-notice strong { font-size: 12px; }
 .preview-notice span { color: #5d6e7c; font-size: 11px; }
-.preview-notice a { color: var(--warning); font-size: 12px; text-decoration: none; font-weight: 700; }
+.preview-notice a, .notice-action { color: var(--warning); font-size: 12px; text-decoration: none; font-weight: 700; }
+.notice-action { border: 0; padding: 8px 0; background: transparent; white-space: nowrap; }
 .group-workspace { grid-column: 2 / -1; display: grid; grid-template-columns: 300px minmax(0, 1fr); min-width: 0; background: var(--surface); }
 .group-sidebar { border-right: 1px solid var(--line); padding: 24px 18px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 .group-sidebar header { display: grid; gap: 4px; }
@@ -338,6 +339,22 @@ body { overflow: hidden; background: #eef3f6; }
 .security-person { background: linear-gradient(180deg, #f4fbfb, #fff); }
 .security-section { background: #fff; }
 .preview-notice { position: fixed; right: 18px; top: 84px; width: min(420px, calc(100vw - 36px)); min-height: 58px; border: 1px solid #efd7cf; border-radius: 14px; box-shadow: 0 12px 38px #102b4624; z-index: 8; animation: notice-in 320ms var(--motion-spring) both; }
+.security-model-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: #061d318f; backdrop-filter: blur(5px); }
+.security-model-dialog { width: min(620px, 100%); max-height: min(760px, calc(100vh - 48px)); overflow-y: auto; padding: 26px; border-radius: 20px; color: #173047; background: #fff; box-shadow: 0 30px 90px #061d3166; animation: workspace-enter 220ms var(--motion-spring) both; }
+.security-model-dialog > header { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 13px; }
+.security-model-dialog header span { color: var(--warning); font-size: var(--font-12); font-weight: 750; }
+.security-model-dialog h2 { margin: 2px 0 0; font-size: 24px; }
+.security-model-icon { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 14px; color: var(--teal); background: var(--teal-soft); }
+.security-model-icon svg { width: 25px; }
+.security-model-lead { margin: 20px 0; color: var(--muted); line-height: 1.65; }
+.security-model-grid { display: grid; gap: 10px; }
+.security-model-grid article { display: flex; align-items: flex-start; gap: 12px; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: #fbfdfd; }
+.security-model-grid article > svg { width: 20px; flex: 0 0 auto; color: var(--teal); }
+.security-model-grid article strong { display: block; margin-bottom: 5px; }
+.security-model-grid article p { margin: 0; color: var(--muted); font-size: var(--font-13); line-height: 1.55; }
+.security-model-warning { display: flex; align-items: center; gap: 9px; margin: 16px 0; padding: 12px 14px; border-radius: 12px; color: var(--warning); background: #fff4f1; font-size: var(--font-13); }
+.security-model-warning svg { width: 18px; flex: 0 0 auto; }
+.security-model-dialog > .ui-button { width: 100%; }
 .update-notice { top: 154px; color: #0b716f; background: #f2fbfa; border-color: #bde3df; }
 .update-notice .update-action { border: 0; border-radius: 10px; padding: 9px 12px; background: var(--teal); color: white; font-weight: 750; white-space: nowrap; }
 .group-workspace {
@@ -662,7 +679,9 @@ body { overflow: hidden; background: #eef3f6; }
   .interactive-message.message-selected { margin-inline: -14px; padding-inline: 14px; }
   .selection-toolbar { grid-template-columns: 40px auto 1fr repeat(3, 40px); padding-inline: 8px; }
   .preview-notice { grid-template-columns: auto 1fr auto; padding-inline: 14px; }
-  .preview-notice a { display: none; }
+  .preview-notice a, .preview-notice .notice-action { display: none; }
+  .security-model-backdrop { padding: 12px; }
+  .security-model-dialog { max-height: calc(100vh - 24px); padding: 20px; border-radius: 16px; }
   .group-workspace, .group-workspace.group-details-open { grid-column: 1 / -1; grid-template-columns: 1fr; min-height: 100vh; }
   .group-sidebar { display: none; }
   .group-details { width: min(330px, 92vw); }
