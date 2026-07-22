@@ -61,7 +61,7 @@ done
   && pass "PostgreSQL ready" || fail "PostgreSQL unavailable"
 [[ "$("${COMPOSE[@]}" exec -T redis redis-cli PING 2>/dev/null | tr -d '\r')" == "PONG" ]] \
   && pass "Redis PING" || fail "Redis unavailable"
-"${COMPOSE[@]}" exec -T web wget -qO- http://localhost/healthz >/dev/null 2>&1 \
+"${COMPOSE[@]}" exec -T web wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 \
   && pass "Web /healthz" || fail "Web /healthz"
 "${COMPOSE[@]}" exec -T api /usr/local/bin/covechat-api --healthcheck >/dev/null 2>&1 \
   && pass "API /health" || fail "API /health"
