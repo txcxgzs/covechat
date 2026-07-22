@@ -34,6 +34,7 @@ done
 if ((PORT_SET == 0)) && [[ -t 0 ]]; then
   read -r -p "反向代理上游端口 / Reverse-proxy upstream port [8088]: " INPUT_PORT
   PORT="${INPUT_PORT:-8088}"
+  [[ -n "$INPUT_PORT" ]] && PORT_SET=1
 fi
 
 [[ "$PORT" =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || {
@@ -91,7 +92,16 @@ EOF
   chmod 600 .env
   echo "[OK] 已生成 .env（权限 0600）/ Generated private .env."
 else
-  echo "[OK] 使用现有 .env；不会覆盖密码、端口或域名配置。"
+  echo "[OK] 使用现有 .env；不会覆盖密码。显式传入的端口或域名会更新。"
+  if ((PORT_SET == 1)); then
+    if grep -q '^COVECHAT_HTTP_PORT=' .env; then
+      sed -i.bak "s|^COVECHAT_HTTP_PORT=.*|COVECHAT_HTTP_PORT=${PORT}|" .env
+    else
+      printf '\nCOVECHAT_HTTP_PORT=%s\n' "$PORT" >> .env
+    fi
+    rm -f .env.bak
+    echo "[OK] 反向代理上游端口已更新为 ${PORT}。"
+  fi
   if [[ -n "$PUBLIC_ORIGIN" ]]; then
     if grep -q '^ALLOWED_ORIGINS=' .env; then
       sed -i.bak "s|^ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${PUBLIC_ORIGIN}|" .env
