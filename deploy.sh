@@ -7,6 +7,7 @@ cd "$ROOT"
 HOST_ADDRESS="127.0.0.1"
 PORT="8088"
 PORT_SET=0
+PORT_CONFIGURED=0
 PUBLIC_ORIGIN=""
 SKIP_VERIFY=0
 
@@ -31,7 +32,16 @@ while (($#)); do
   esac
 done
 
-if ((PORT_SET == 0)) && [[ -t 0 ]]; then
+if ((PORT_SET == 0)) && [[ -f .env ]]; then
+  EXISTING_PORT="$(sed -n 's/^COVECHAT_HTTP_PORT=//p' .env | tail -n 1 | tr -d '\r')"
+  if [[ "$EXISTING_PORT" =~ ^[0-9]+$ ]] && ((EXISTING_PORT >= 1 && EXISTING_PORT <= 65535)); then
+    PORT="$EXISTING_PORT"
+    PORT_CONFIGURED=1
+    echo "[OK] 复用现有反向代理上游端口 ${PORT} / Reusing configured upstream port ${PORT}."
+  fi
+fi
+
+if ((PORT_SET == 0 && PORT_CONFIGURED == 0)) && [[ -t 0 ]]; then
   read -r -p "反向代理上游端口 / Reverse-proxy upstream port [8088]: " INPUT_PORT
   PORT="${INPUT_PORT:-8088}"
   [[ -n "$INPUT_PORT" ]] && PORT_SET=1
