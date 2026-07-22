@@ -131,6 +131,7 @@ COMPOSE=("${DOCKER[@]}" compose --env-file .env -f compose.deploy.yml)
 echo "[1/3] 拉取基础镜像 / Pulling base images..."
 "${COMPOSE[@]}" pull postgres redis minio
 echo "[2/3] 构建并启动 / Building and starting..."
+echo "[INFO] 首次构建 Rust API 通常需要 5-15 分钟；后续更新会复用 Docker 构建缓存。"
 "${COMPOSE[@]}" up -d --build --pull always --remove-orphans
 echo "[3/3] 等待健康检查 / Waiting for health checks..."
 

@@ -41,6 +41,8 @@ chmod +x install.sh deploy.sh update.sh deploy/verify.sh
 
 已经部署后需要更换端口，也可以再次执行 `./deploy.sh --port 新端口`。脚本会更新现有 `.env`、重新创建 Web 容器并执行健康检查，不会修改数据库密码或删除数据卷。
 
+第一次部署需要下载 Rust/Node 基础镜像，并在服务器编译 Signal、OpenMLS、AWS SDK 和 SQLx 等依赖，低配或网络较慢的服务器通常需要约 5–15 分钟。看到 `cargo build --release` 持续输出 `Compiling` 表示仍在正常构建，请不要中断。项目已启用 Docker BuildKit 的 Cargo、Git 和 npm 缓存，后续更新通常会明显更快。
+
 将域名的 HTTPS/WebSocket 反向代理指向脚本显示的上游地址，然后打开域名。首次启动页面会引导填写公网访问地址和安装令牌；配置完成后才会进入账号注册页面。需要自动化部署时，仍可使用 `./deploy.sh --domain chat.example.com --port 8088` 跳过网页域名向导。
 
 反向代理端口必须在网页打开前确定，因此由部署脚本询问；域名属于应用安全配置，可以在网页中完成。公网地址必须使用完整 HTTPS Origin，例如 `https://chat.example.com`，不能包含路径。
