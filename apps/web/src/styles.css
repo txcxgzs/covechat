@@ -312,7 +312,63 @@ body { overflow: hidden; background: #eef3f6; }
 .admin-status.resolved { color: #24724d; background: #e4f3ec; }
 .admin-status.dismissed { color: var(--muted); background: #edf1f3; }
 .admin-empty { padding: 60px; color: var(--muted); text-align: center; }
-.profile-workspace { grid-column: 2 / -1; min-width: 0; overflow-y: auto; background: #f5f8fa; }
+.profile-workspace { grid-column: 2 / -1; min-width: 0; overflow-y: auto; background: #f7f9fa; }
+.account-page { width: min(1080px, calc(100% - 64px)); margin: 0 auto; padding: 42px 0 64px; }
+.account-hero { display: flex; align-items: center; gap: 20px; padding: 0 0 30px; border-bottom: 1px solid var(--line); }
+.account-avatar { width: 72px; height: 72px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; color: white; background: linear-gradient(145deg, #18b3b1, #078286); box-shadow: 0 10px 24px #0d99932a; font-size: 25px; font-weight: 800; }
+.account-hero h1 { margin: 0 0 5px; color: #142d43; font-size: 29px; letter-spacing: -.035em; }
+.account-hero p { display: flex; align-items: center; gap: 7px; margin: 8px 0 0; color: #21886f; font-size: 13px; }
+.account-hero p svg { width: 17px; }
+.account-identity { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+.account-identity button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px; color: #536879; background: white; font-size: 12px; }
+.account-identity button svg { width: 14px; }
+.account-section { margin-top: 24px; }
+.account-section h2 { margin: 0 0 9px; color: #263e51; font-size: 15px; }
+.account-list { overflow: hidden; border: 1px solid #d8e1e6; border-radius: 13px; background: white; box-shadow: 0 5px 18px #17304708; }
+.account-row { min-height: 76px; display: flex; align-items: center; gap: 16px; padding: 13px 20px; }
+.account-row + .account-row { border-top: 1px solid #e4eaed; }
+.account-row-icon { width: 28px; display: grid; place-items: center; flex: 0 0 auto; color: #536779; }
+.account-row-icon svg { width: 21px; }
+.account-row-copy { min-width: 0; display: grid; gap: 3px; flex: 1; }
+.account-row-copy strong { color: #20384b; font-size: 14px; }
+.account-row-copy small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.account-row-action { display: flex; align-items: center; justify-content: flex-end; gap: 11px; color: #526579; white-space: nowrap; }
+.account-row-action > svg { width: 17px; }
+.masked-value { color: #788996; letter-spacing: 2px; }
+.current-device-badge { display: inline-flex; padding: 5px 9px; border: 1px solid #a9dccc; border-radius: 7px; color: #168268; background: #effaf6; font-size: 12px; }
+.account-danger .account-row:last-child .account-row-icon, .account-danger .account-row:last-child .account-row-copy strong { color: #c7444b; }
+.profile-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 -6px; padding: 11px 13px; border-radius: 9px; color: #176466 !important; background: #e3f4f2; }
+.profile-status button { display: grid; place-items: center; border: 0; color: inherit; background: none; }
+.profile-status svg { width: 16px; }
+.account-dialog-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: #071c2db8; backdrop-filter: blur(3px); animation: fade-in 140ms ease-out; }
+.account-dialog { position: relative; width: min(500px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; padding: 30px; border: 1px solid #dbe3e7; border-radius: 15px; background: white; box-shadow: 0 30px 80px #071c2d55; animation: dialog-in 180ms var(--motion-spring); }
+.account-dialog h2 { margin: 0 36px 7px 0; color: #193347; font-size: 22px; letter-spacing: -.025em; }
+.account-dialog p { margin: 0 0 23px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.account-dialog-close { position: absolute; top: 20px; right: 20px; width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 8px; color: #647786; background: transparent; }
+.account-dialog-close:hover { background: #f0f4f5; }
+.account-dialog-close svg { width: 20px; }
+.dialog-fields { display: grid; gap: 15px; }
+.dialog-fields label, .delete-confirm { display: grid; gap: 7px; color: #263e51; font-size: 13px; font-weight: 700; }
+.dialog-fields label > span { position: relative; display: block; }
+.dialog-fields input, .delete-confirm input { width: 100%; padding: 12px 42px 12px 12px; border: 1px solid #cdd8de; border-radius: 9px; outline: 0; background: #fbfcfd; }
+.dialog-fields input:focus, .delete-confirm input:focus { border-color: var(--teal); box-shadow: 0 0 0 3px #18a8a51d; background: white; }
+.dialog-fields label button { position: absolute; inset: 0 7px 0 auto; width: 34px; display: grid; place-items: center; border: 0; color: #6f808e; background: transparent; }
+.dialog-fields label button svg { width: 18px; }
+.dialog-fields > small { margin-top: -7px; color: var(--muted); }
+.account-dialog footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 26px; }
+.recovery-code { display: block; padding: 16px; border: 1px solid #cae4e2; border-radius: 10px; color: #166c6e; background: #f0faf9; overflow-wrap: anywhere; line-height: 1.7; }
+.dialog-device-list { display: grid; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
+.dialog-device-list > div { min-height: 66px; display: flex; align-items: center; gap: 12px; padding: 11px 13px; }
+.dialog-device-list > div + div { border-top: 1px solid var(--line); }
+.dialog-device-list > div > span:first-child { display: grid; place-items: center; color: #607685; }
+.dialog-device-list svg { width: 20px; }
+.dialog-device-list > div > div { min-width: 0; display: grid; gap: 3px; flex: 1; }
+.dialog-device-list small { color: var(--muted); font-size: 11px; }
+.device-confirm { display: flex; gap: 6px; }
+.dialog-warning { display: flex; align-items: center; gap: 10px; padding: 13px; border-radius: 9px; color: #855e18; background: #fff6df; font-size: 13px; }
+.dialog-warning svg { width: 20px; }
+.delete-confirm input { margin-top: 3px; padding-right: 12px; }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(.985); } }
 .contacts-workspace { grid-column: 2 / -1; min-width: 0; overflow-y: auto; padding: 34px clamp(22px, 4vw, 58px) 50px; background: radial-gradient(circle at 85% 0, #dff5f399, transparent 28%), #f5f8fa; }
 .contacts-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin: 0 auto 24px; max-width: 1120px; }
 .contacts-hero h1 { margin: 4px 0 6px; font-size: 34px; letter-spacing: -.04em; }
@@ -376,6 +432,20 @@ body { overflow: hidden; background: #eef3f6; }
 .profile-status { grid-column: 1 / -1; padding: 12px 15px; border-radius: 10px; color: #176466 !important; background: #e3f4f2; }
 @media (max-width: 900px) { .contacts-layout { grid-template-columns: 1fr; } .contacts-list-card { grid-column: auto; } .contacts-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .admin-shell { grid-template-columns: 68px minmax(0, 1fr); } .admin-brand { justify-content: center; padding-inline: 0; font-size: 0; } .admin-shell > aside button { justify-content: center; font-size: 0; } .admin-metrics { grid-template-columns: repeat(2, 1fr); } .contacts-workspace { grid-column: 1 / -1; padding: 88px 14px 28px; } .contacts-hero, .contacts-list-heading { align-items: stretch; flex-direction: column; } .contacts-hero-actions { align-items: stretch; flex-direction: column-reverse; } .my-username { width: 100%; } .request-columns { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  .profile-workspace { grid-column: 1 / -1; padding-top: 66px; }
+  .account-page { width: calc(100% - 28px); padding: 24px 0 38px; }
+  .account-hero { align-items: flex-start; padding-bottom: 24px; }
+  .account-avatar { width: 56px; height: 56px; font-size: 19px; }
+  .account-hero h1 { font-size: 24px; }
+  .account-identity { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .account-row { align-items: flex-start; gap: 11px; padding: 15px 14px; }
+  .account-row-action { align-self: center; }
+  .account-row-action > strong, .masked-value { display: none; }
+  .account-dialog-backdrop { align-items: end; padding: 0; }
+  .account-dialog { width: 100%; max-height: 90vh; padding: 26px 20px calc(24px + env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
+  .account-dialog footer { position: sticky; bottom: 0; padding-top: 12px; background: white; }
+}
 .app { height: 100vh; }
 .workspace {
   height: 100%;
