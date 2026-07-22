@@ -32,7 +32,8 @@ use persistence::Persistence;
 use rate_limit::RateLimiter;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::{Mutex, broadcast};
+use subtle::ConstantTimeEq;
+use tokio::sync::{Mutex, RwLock, broadcast};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -49,7 +50,7 @@ struct AppState {
     persistence: Option<Persistence>,
     object_store: Option<ObjectStore>,
     rate_limiter: Option<RateLimiter>,
-    allowed_origins: AllowedOrigins,
+    allowed_origins: Arc<RwLock<AllowedOrigins>>,
 }
 
 /// 允许的 Origin 列表，用于 CSRF 纵深防御。
@@ -404,14 +405,23 @@ async fn main() {
     } else {
         tracing::warn!("REDIS_URL is unset; mailbox events are process-local");
     }
-    let allowed_origins = AllowedOrigins::from_env();
+    let mut allowed_origins = AllowedOrigins::from_env();
+    if let Some(database) = &persistence
+        && let Some(origin) = database
+            .read_deployment_setting("public_origin")
+            .await
+            .expect("read deployment origin")
+    {
+        allowed_origins = AllowedOrigins(vec![origin]);
+        tracing::info!("Origin enforcement loaded from deployment settings");
+    }
     let state = AppState {
         inner: Arc::new(Mutex::new(store)),
         events,
         persistence,
         object_store,
         rate_limiter,
-        allowed_origins,
+        allowed_origins: Arc::new(RwLock::new(allowed_origins)),
     };
     tokio::spawn(cleanup_loop(state.clone()));
     let app = router(state);
@@ -434,7 +444,14 @@ async fn main() {
 /// 空 allowed_origins = 开发模式，放行所有。
 /// 用于 CSRF 纵深防御（本项目用 Bearer token 不用 cookie，CSRF 风险本身低，但 Origin 校验仍能挡住跨站请求）。
 async fn require_origin(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    if state.allowed_origins.is_empty() {
+    if request.uri().path() == "/health" || request.uri().path().starts_with("/v1/setup") {
+        return next.run(request).await;
+    }
+    let allowed_origins = state.allowed_origins.read().await;
+    if allowed_origins.is_empty() {
+        if setup_is_required() {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
         return next.run(request).await;
     }
     let method = request.method();
@@ -446,7 +463,7 @@ async fn require_origin(State(state): State<AppState>, request: Request, next: N
         .get("origin")
         .and_then(|value| value.to_str().ok());
     match origin {
-        Some(origin) if state.allowed_origins.is_allowed(origin) => next.run(request).await,
+        Some(origin) if allowed_origins.is_allowed(origin) => next.run(request).await,
         _ => StatusCode::FORBIDDEN.into_response(),
     }
 }
@@ -454,6 +471,8 @@ async fn require_origin(State(state): State<AppState>, request: Request, next: N
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/v1/setup/status", get(setup_status))
+        .route("/v1/setup", post(complete_setup))
         .route("/v1/onboarding", post(onboard_account))
         .route("/v1/devices", get(list_devices).post(register_device))
         .route("/v1/devices/{device_id}/prekeys", put(update_prekeys))
@@ -515,6 +534,87 @@ async fn health() -> Json<serde_json::Value> {
         "securityStatus": "experimental-unaudited",
         "plaintextAccepted": false
     }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupStatus {
+    configured: bool,
+    public_origin: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupInput {
+    setup_token: String,
+    public_origin: String,
+}
+
+async fn setup_status(State(state): State<AppState>) -> Json<SetupStatus> {
+    let origins = state.allowed_origins.read().await;
+    Json(SetupStatus {
+        configured: !origins.is_empty(),
+        public_origin: origins.0.first().cloned(),
+    })
+}
+
+async fn complete_setup(
+    State(state): State<AppState>,
+    Json(input): Json<SetupInput>,
+) -> StatusCode {
+    let expected = match env::var("COVECHAT_SETUP_TOKEN") {
+        Ok(value) if value.len() >= 24 => value,
+        _ => return StatusCode::SERVICE_UNAVAILABLE,
+    };
+    if input.setup_token.len() != expected.len()
+        || input
+            .setup_token
+            .as_bytes()
+            .ct_eq(expected.as_bytes())
+            .unwrap_u8()
+            != 1
+    {
+        return StatusCode::UNAUTHORIZED;
+    }
+    let Some(origin) = normalize_public_origin(&input.public_origin) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    let mut allowed_origins = state.allowed_origins.write().await;
+    if !allowed_origins.is_empty() {
+        return StatusCode::CONFLICT;
+    }
+    let Some(database) = &state.persistence else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    if database
+        .write_deployment_setting("public_origin", &origin)
+        .await
+        .is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    *allowed_origins = AllowedOrigins(vec![origin]);
+    StatusCode::NO_CONTENT
+}
+
+fn normalize_public_origin(value: &str) -> Option<String> {
+    let origin = value.trim().trim_end_matches('/');
+    let uri = origin.parse::<axum::http::Uri>().ok()?;
+    let authority = uri.authority()?;
+    let is_local = matches!(authority.host(), "localhost" | "127.0.0.1" | "[::1]");
+    if !(matches!(uri.scheme_str(), Some("https"))
+        || matches!(uri.scheme_str(), Some("http")) && is_local)
+        || uri.path() != "/"
+        || uri.query().is_some()
+        || origin.contains('@')
+    {
+        return None;
+    }
+    Some(origin.to_owned())
+}
+
+fn setup_is_required() -> bool {
+    matches!(env::var("COVECHAT_SETUP_TOKEN"), Ok(value) if value.len() >= 24)
 }
 
 async fn create_abuse_report(
@@ -1748,12 +1848,15 @@ async fn events(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     // WebSocket 升级是 GET 请求，不经过 require_origin 中间件，这里手动校验 Origin。
-    if !state.allowed_origins.is_empty() {
+    let allowed_origins = state.allowed_origins.read().await;
+    if !allowed_origins.is_empty() {
         let origin = headers.get("origin").and_then(|value| value.to_str().ok());
         match origin {
-            Some(origin) if state.allowed_origins.is_allowed(origin) => {}
+            Some(origin) if allowed_origins.is_allowed(origin) => {}
             _ => return StatusCode::FORBIDDEN.into_response(),
         }
+    } else if setup_is_required() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let mut store = state.inner.lock().await;
     if authenticated_websocket_device(&headers, &mut store) != Some(device_id) {
@@ -2108,7 +2211,7 @@ mod tests {
             persistence: None,
             object_store: None,
             rate_limiter: None,
-            allowed_origins: AllowedOrigins::default(),
+            allowed_origins: Arc::new(RwLock::new(AllowedOrigins::default())),
         };
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2942,6 +3045,22 @@ mod tests {
         assert!(!origins.is_allowed("https://evil.com"));
         assert!(!origins.is_allowed("https://chat.example.com.evil.com"));
         assert!(!origins.is_allowed(""));
+    }
+
+    #[test]
+    fn setup_origin_requires_https_except_for_local_development() {
+        assert_eq!(
+            normalize_public_origin("https://chat.example.com/"),
+            Some("https://chat.example.com".to_owned())
+        );
+        assert_eq!(
+            normalize_public_origin("http://localhost:8088"),
+            Some("http://localhost:8088".to_owned())
+        );
+        assert!(normalize_public_origin("http://chat.example.com").is_none());
+        assert!(normalize_public_origin("https://chat.example.com/path").is_none());
+        assert!(normalize_public_origin("https://user@chat.example.com").is_none());
+        assert!(normalize_public_origin("javascript:alert(1)").is_none());
     }
 
     // === anonymous_rate_limit 单元测试 ===

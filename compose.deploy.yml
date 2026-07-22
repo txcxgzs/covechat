@@ -29,8 +29,9 @@ services:
       AWS_SECRET_ACCESS_KEY: "${MINIO_ROOT_PASSWORD}"
       AWS_EC2_METADATA_DISABLED: "true"
       RUST_LOG: covechat_api=info
-      # Comma-separated exact origins. Required for public deployment.
+      # Optional when the browser setup wizard persists the public origin.
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-}"
+      COVECHAT_SETUP_TOKEN: "${COVECHAT_SETUP_TOKEN:?COVECHAT_SETUP_TOKEN is required}"
     expose: ["8080"]
     depends_on:
       postgres:

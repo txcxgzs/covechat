@@ -22,7 +22,9 @@ contact a project maintainer privately.
 
 ## Production deployment requirements
 
-- **`ALLOWED_ORIGINS` must be set** to the public origin(s) served to users.
+- A public origin must be configured either with **`ALLOWED_ORIGINS`** or the
+  token-protected first-run browser wizard. Until then, application endpoints
+  remain locked while setup and health checks stay available.
   An empty value means development mode: the `require_origin` middleware and
   the WebSocket `Origin` check pass through all requests and the API logs a
   warning. Running production with an empty allow-list disables the CSRF

@@ -154,6 +154,29 @@ impl Persistence {
         Ok(store)
     }
 
+    pub async fn read_deployment_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        Ok(
+            sqlx::query("SELECT setting_value FROM deployment_settings WHERE setting_key = $1")
+                .bind(key)
+                .fetch_optional(&self.pool)
+                .await?
+                .map(|row| row.get("setting_value")),
+        )
+    }
+
+    pub async fn write_deployment_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO deployment_settings (setting_key, setting_value) VALUES ($1, $2)
+             ON CONFLICT (setting_key) DO UPDATE
+             SET setting_value = EXCLUDED.setting_value, updated_at = now()",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn onboard(
         &self,
         account: &AccountIdentity,

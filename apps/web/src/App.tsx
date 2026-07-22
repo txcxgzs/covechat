@@ -8,6 +8,7 @@ import type { Conversation, Message } from "./data";
 import { copy, detectLocale, type Locale, type Translate } from "./i18n";
 import { PWA_APPLY_UPDATE_EVENT, PWA_UPDATE_READY_EVENT } from "./pwa-updates";
 import { SecurityGate } from "./security/SecurityGate";
+import { DeploymentGate } from "./deployment/DeploymentGate";
 import { type SecureProfile } from "./security/vault";
 import type { AttachmentReference, AuthSession, DeviceRecord } from "@covechat/protocol";
 import {
@@ -1355,5 +1356,9 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
 }
 
 export function App() {
-  return <SecurityGate>{({ profile, session }) => <ChatApp profile={profile} session={session} />}</SecurityGate>;
+  return (
+    <DeploymentGate>
+      <SecurityGate>{({ profile, session }) => <ChatApp profile={profile} session={session} />}</SecurityGate>
+    </DeploymentGate>
+  );
 }

@@ -24,6 +24,7 @@ jobs:
           bash -n deploy.sh deploy/verify.sh
           POSTGRES_PASSWORD=test-postgres-password \
           MINIO_ROOT_PASSWORD=test-minio-password \
+          COVECHAT_SETUP_TOKEN=test-setup-token-at-least-24-characters \
           ALLOWED_ORIGINS=https://chat.example.com \
           docker compose -f compose.deploy.yml config --quiet
       - run: npm run build

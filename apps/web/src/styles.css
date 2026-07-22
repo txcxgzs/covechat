@@ -68,6 +68,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .gate-secondary { width: 100%; border: 0; background: transparent; color: #0b6f75; padding: 12px; margin-top: 8px; font-weight: 700; }
 .gate-secondary:hover { text-decoration: underline; }
 .gate-error { color: var(--warning); font-size: 12px; margin: 0; }
+.deployment-panel { width: min(100%, 520px); }
+.deployment-hint { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.deployment-hint svg { width: 17px; flex: 0 0 auto; color: var(--teal); }
 .recovery-code { display: block; overflow-wrap: anywhere; background: #eef7f7; border: 1px solid #c8e8e7; border-radius: 8px; padding: 16px; color: #0b5860; font-size: 13px; line-height: 1.6; margin: 18px 0; user-select: all; }
 .attachment-bubble { display: grid; gap: 7px; min-width: 230px; }
 .attachment-bubble strong { display: flex; align-items: center; gap: 7px; font-size: 12px; }

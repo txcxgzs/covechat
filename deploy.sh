@@ -6,6 +6,7 @@ cd "$ROOT"
 
 HOST_ADDRESS="127.0.0.1"
 PORT="8088"
+PORT_SET=0
 PUBLIC_ORIGIN=""
 SKIP_VERIFY=0
 
@@ -23,12 +24,17 @@ while (($#)); do
   case "$1" in
     --domain) [[ $# -ge 2 ]] || exit 2; PUBLIC_ORIGIN="$2"; shift 2 ;;
     --host) [[ $# -ge 2 ]] || exit 2; HOST_ADDRESS="$2"; shift 2 ;;
-    --port) [[ $# -ge 2 ]] || exit 2; PORT="$2"; shift 2 ;;
+    --port) [[ $# -ge 2 ]] || exit 2; PORT="$2"; PORT_SET=1; shift 2 ;;
     --skip-verify) SKIP_VERIFY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数 / Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if ((PORT_SET == 0)) && [[ -t 0 ]]; then
+  read -r -p "反向代理上游端口 / Reverse-proxy upstream port [8088]: " INPUT_PORT
+  PORT="${INPUT_PORT:-8088}"
+fi
 
 [[ "$PORT" =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || {
   echo "端口必须是 1-65535 / Port must be between 1 and 65535." >&2
@@ -80,6 +86,7 @@ POSTGRES_PASSWORD=$(random_secret)
 MINIO_ROOT_USER=covechat
 MINIO_ROOT_PASSWORD=$(random_secret)
 ALLOWED_ORIGINS=${PUBLIC_ORIGIN}
+COVECHAT_SETUP_TOKEN=$(random_secret)
 EOF
   chmod 600 .env
   echo "[OK] 已生成 .env（权限 0600）/ Generated private .env."
@@ -95,13 +102,19 @@ else
   fi
 fi
 
+if ! grep -q '^COVECHAT_SETUP_TOKEN=' .env; then
+  printf '\nCOVECHAT_SETUP_TOKEN=%s\n' "$(random_secret)" >> .env
+  chmod 600 .env
+fi
+
 set -a
 # shellcheck disable=SC1091
 source .env
 set +a
 
 if [[ -z "${ALLOWED_ORIGINS:-}" ]]; then
-  echo "[WARN] ALLOWED_ORIGINS 为空，只适合本机测试。公网部署请传 --domain。"
+  echo "[SETUP] 打开站点后按网页向导配置域名 / Configure the domain in the browser setup wizard."
+  echo "[SETUP] 安装令牌 / Setup token: ${COVECHAT_SETUP_TOKEN}"
 fi
 
 COMPOSE=("${DOCKER[@]}" compose --env-file .env -f compose.deploy.yml)
@@ -123,3 +136,7 @@ CoveChat 已启动 / CoveChat is running
   日志 / Logs:   docker compose --env-file .env -f compose.deploy.yml logs -f
   更新 / Update: ./update.sh
 EOF
+
+if [[ -z "${ALLOWED_ORIGINS:-}" ]]; then
+  echo "  网页配置 / Web setup: open your domain and enter token ${COVECHAT_SETUP_TOKEN}"
+fi
