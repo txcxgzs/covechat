@@ -24,6 +24,7 @@ import {
   appendConversationHistory,
   listConversationHistories,
   loadConversationHistory,
+  markConversationRead,
   removeConversationHistoryItems,
 } from "./security/history";
 import { syncEncryptedBackup } from "./security/backup";
@@ -137,12 +138,13 @@ function ConversationList({ historyRevision, locale, onSelect, profile, recipien
   const [query, setQuery] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   useEffect(() => {
-    void listConversationHistories(profile).then((items) => setConversations(items.map(({ username, latest }) => ({
+    void listConversationHistories(profile).then((items) => setConversations(items.map(({ username, latest, unread }) => ({
       id: username,
       name: username,
       initials: username.slice(0, 2).toUpperCase(),
       preview: latest?.body ?? (latest?.attachment ? `🔒 ${latest.attachment.fileName}` : ""),
       time: latest ? new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(new Date(latest.createdAt)) : "",
+      unread,
     }))));
   }, [historyRevision, locale, profile, recipient]);
   const filtered = useMemo(() => {
@@ -428,7 +430,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
       setAttachments([]);
       return;
     }
-    void loadConversationHistory(profile, recipient).then((history) => {
+    void loadConversationHistory(profile, recipient).then(async (history) => {
       setMessages(history.filter((item) => item.body).map((item) => ({
         id: item.id,
         from: item.from,
@@ -442,6 +444,11 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
         replyTo: item.reply,
       })));
       setAttachments(history.flatMap((item) => item.attachment ? [item.attachment] : []));
+      const latestIncoming = history.filter((item) => item.from === "them").at(-1)?.createdAt;
+      if (latestIncoming) {
+        await markConversationRead(profile, recipient, latestIncoming);
+        onHistoryChange();
+      }
     });
   }, [locale, profile, recipient]);
 
@@ -495,9 +502,11 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
           reply: message.reply,
         });
       }
+      const visible = received.filter((message) => message.senderUsername === recipient);
+      const latestVisible = visible.at(-1)?.createdAt;
+      if (latestVisible) await markConversationRead(profile, recipient, latestVisible);
       onHistoryChange();
       void syncEncryptedBackup(profile, session).catch(() => undefined);
-      const visible = received.filter((message) => message.senderUsername === recipient);
       setMessages((current) => {
         const known = new Set(current.map((message) => message.id));
         return [

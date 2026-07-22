@@ -134,6 +134,7 @@ export type TrustState = {
   version: 1;
   identities: Record<string, TrustedIdentity>;
   history?: Record<string, LocalHistoryItem[]>;
+  conversationReadAt?: Record<string, number>;
   pendingAttachmentUploads?: Record<string, PendingAttachmentUpload>;
 };
 

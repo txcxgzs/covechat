@@ -74,13 +74,32 @@ export async function removeConversationHistoryItems(
 
 export async function listConversationHistories(
   profile: SecureProfile,
-): Promise<Array<{ username: string; latest?: LocalHistoryItem }>> {
+): Promise<Array<{ username: string; latest?: LocalHistoryItem; unread: number }>> {
   const state = await loadTrustState(profile);
   return Object.entries(state.history ?? {})
-    .map(([username, items]) => ({
-      username,
-      latest: items.filter((item) => !item.expiresAt || item.expiresAt > Date.now()).at(-1),
-    }))
+    .map(([username, items]) => {
+      const active = items.filter((item) => !item.expiresAt || item.expiresAt > Date.now());
+      const readAt = state.conversationReadAt?.[username] ?? 0;
+      return {
+        username,
+        latest: active.at(-1),
+        unread: active.filter((item) => item.from === "them" && item.createdAt > readAt).length,
+      };
+    })
     .filter((conversation) => conversation.latest)
     .sort((a, b) => (b.latest?.createdAt ?? 0) - (a.latest?.createdAt ?? 0));
+}
+
+export async function markConversationRead(
+  profile: SecureProfile,
+  username: string,
+  readAt = Date.now(),
+): Promise<void> {
+  const state = await loadTrustState(profile);
+  const key = normalizedUsername(username);
+  const previous = state.conversationReadAt?.[key] ?? 0;
+  if (readAt <= previous) return;
+  state.conversationReadAt ??= {};
+  state.conversationReadAt[key] = readAt;
+  await saveTrustState(profile, state);
 }
