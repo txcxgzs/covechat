@@ -39,6 +39,9 @@ export type RecoveryBackup = {
   backup: EncryptedBackup;
 };
 
+export type ContactSummary = { username: string; createdAt: number };
+export type ContactRequests = { incoming: ContactSummary[]; outgoing: ContactSummary[] };
+
 function devicePayload(profile: SecureProfile, prekeyBundle: string): Uint8Array {
   return encoder.encode(JSON.stringify([
     1,
@@ -202,6 +205,39 @@ export async function deleteOwnAccount(profile: SecureProfile, session: AuthSess
   const signature = await signWithAccount(profile, encoder.encode(JSON.stringify([1, "delete-account", profile.username, createdAt])));
   const response = await fetch("/api/v1/account", { method: "DELETE", headers: { "content-type": "application/json", authorization: `Bearer ${session.accessToken}` }, body: JSON.stringify({ username: profile.username, createdAt, signature }) });
   if (!response.ok) throw new Error(`account deletion failed: ${response.status}`);
+}
+
+export async function listContacts(session: AuthSession): Promise<ContactSummary[]> {
+  const response = await fetch("/api/v1/contacts", { headers: authenticatedHeaders(session) });
+  if (!response.ok) throw new Error(`contacts failed: ${response.status}`);
+  return response.json() as Promise<ContactSummary[]>;
+}
+
+export async function listContactRequests(session: AuthSession): Promise<ContactRequests> {
+  const response = await fetch("/api/v1/contact-requests", { headers: authenticatedHeaders(session) });
+  if (!response.ok) throw new Error(`contact requests failed: ${response.status}`);
+  return response.json() as Promise<ContactRequests>;
+}
+
+export async function sendContactRequest(username: string, session: AuthSession): Promise<{ status: "pending" | "accepted" | "contact" }> {
+  const response = await fetch(`/api/v1/contact-requests/${encodeURIComponent(username)}`, { method: "POST", headers: authenticatedHeaders(session) });
+  if (!response.ok) throw new Error(response.status === 404 ? "user-not-found" : response.status === 403 ? "contact-forbidden" : `contact request failed: ${response.status}`);
+  return response.json() as Promise<{ status: "pending" | "accepted" | "contact" }>;
+}
+
+export async function acceptContactRequest(username: string, session: AuthSession): Promise<void> {
+  const response = await fetch(`/api/v1/contact-requests/${encodeURIComponent(username)}/accept`, { method: "POST", headers: authenticatedHeaders(session) });
+  if (!response.ok) throw new Error(`accept request failed: ${response.status}`);
+}
+
+export async function removeContactRequest(username: string, session: AuthSession): Promise<void> {
+  const response = await fetch(`/api/v1/contact-requests/${encodeURIComponent(username)}`, { method: "DELETE", headers: authenticatedHeaders(session) });
+  if (!response.ok) throw new Error(`remove request failed: ${response.status}`);
+}
+
+export async function removeContact(username: string, session: AuthSession): Promise<void> {
+  const response = await fetch(`/api/v1/contacts/${encodeURIComponent(username)}`, { method: "DELETE", headers: authenticatedHeaders(session) });
+  if (!response.ok) throw new Error(`remove contact failed: ${response.status}`);
 }
 
 export async function submitAbuseReport(

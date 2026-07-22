@@ -313,6 +313,53 @@ body { overflow: hidden; background: #eef3f6; }
 .admin-status.dismissed { color: var(--muted); background: #edf1f3; }
 .admin-empty { padding: 60px; color: var(--muted); text-align: center; }
 .profile-workspace { grid-column: 2 / -1; min-width: 0; overflow-y: auto; background: #f5f8fa; }
+.contacts-workspace { grid-column: 2 / -1; min-width: 0; overflow-y: auto; padding: 34px clamp(22px, 4vw, 58px) 50px; background: radial-gradient(circle at 85% 0, #dff5f399, transparent 28%), #f5f8fa; }
+.contacts-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin: 0 auto 24px; max-width: 1120px; }
+.contacts-hero h1 { margin: 4px 0 6px; font-size: 34px; letter-spacing: -.04em; }
+.contacts-hero p { margin: 0; color: var(--muted); }
+.contacts-hero-actions { display: flex; align-items: center; gap: 10px; }
+.my-username { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 10px; min-width: 230px; padding: 14px 14px 14px 18px; border: 1px solid #cde4e5; border-radius: 16px; background: #ffffffd9; box-shadow: 0 10px 30px #1730470c; }
+.my-username span { grid-column: 1; color: var(--muted); font-size: var(--font-12); }
+.my-username strong { grid-column: 1; color: #0c7777; font-size: var(--font-16); }
+.my-username .icon-button { grid-column: 2; grid-row: 1 / 3; }
+.contacts-layout { max-width: 1120px; display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 18px; margin: 0 auto; }
+.contact-discovery, .contact-requests-card, .contacts-list-card { padding: 22px; border: 1px solid var(--line); border-radius: 20px; background: #fffffff0; box-shadow: 0 12px 38px #1730470b; }
+.contact-card-heading { display: flex; align-items: center; gap: 12px; }
+.contact-card-heading > span { width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 13px; color: var(--teal); background: var(--teal-soft); }
+.contact-card-heading svg { width: 21px; }
+.contact-card-heading h2, .contact-card-heading p { margin: 0; }
+.contact-card-heading h2 { font-size: var(--font-18); }
+.contact-card-heading p { margin-top: 3px; color: var(--muted); font-size: var(--font-13); }
+.contact-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-top: 20px; padding: 5px 5px 5px 13px; border-radius: 15px; background: #f0f5f7; }
+.contact-search > svg { width: 18px; color: var(--muted); }
+.contact-search input, .contacts-list-heading input { min-width: 0; border: 0; outline: 0; padding: 10px 4px; color: #173047; background: transparent; }
+.contact-result { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 14px; border: 1px solid #cce5e3; border-radius: 15px; background: #f3fbfa; }
+.contact-result > div { min-width: 0; display: grid; gap: 3px; flex: 1; }
+.contact-result small { color: var(--muted); }
+.contact-status { margin: 14px 0 0; padding: 10px 12px; border-radius: 10px; color: #176466; background: #e5f5f3; }
+.request-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+.request-columns > div { min-width: 0; padding: 13px; border-radius: 14px; background: #f6f9fa; }
+.request-columns h3 { margin: 0 0 10px; font-size: var(--font-13); }
+.request-columns p { color: var(--muted); font-size: var(--font-12); line-height: 1.5; }
+.request-row { display: flex; align-items: center; gap: 7px; padding: 7px 0; border-top: 1px solid var(--line); }
+.request-row strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.request-row > span:not(.avatar) { color: var(--muted); font-size: var(--font-12); }
+.request-row .icon-button { width: 32px; height: 32px; }
+.contacts-list-card { grid-column: 1 / -1; }
+.contacts-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.contacts-list-heading > label { display: flex; align-items: center; gap: 6px; padding: 0 11px; border-radius: 18px; background: #f0f5f7; }
+.contacts-list-heading > label svg { width: 16px; color: var(--muted); }
+.contacts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+.contacts-grid > article { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 15px; background: white; transition: transform 150ms ease, box-shadow 150ms ease; }
+.contacts-grid > article:hover { transform: translateY(-2px); box-shadow: 0 10px 24px #17304710; }
+.contacts-grid > article > div { min-width: 0; display: grid; gap: 3px; flex: 1; }
+.contacts-grid > article strong { overflow: hidden; text-overflow: ellipsis; }
+.contacts-grid > article small { color: var(--muted); }
+.contacts-grid > article > .icon-button { color: #ad4248; }
+.contacts-empty { grid-column: 1 / -1; display: grid; justify-items: center; gap: 8px; padding: 38px; color: var(--muted); text-align: center; }
+.contacts-empty > svg { width: 38px; height: 38px; color: var(--teal); }
+.contacts-empty strong { color: #294257; }
+.contacts-empty p { margin: 0; }
 .profile-grid { width: min(960px, calc(100% - 40px)); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0 auto 40px; }
 .profile-grid .settings-card { align-content: start; }
 .profile-grid h2 { margin: 0 0 8px; }
@@ -327,7 +374,8 @@ body { overflow: hidden; background: #eef3f6; }
 .danger-zone { border-color: #efcbcd !important; }
 .danger-zone > div { display: flex; gap: 10px; flex-wrap: wrap; }
 .profile-status { grid-column: 1 / -1; padding: 12px 15px; border-radius: 10px; color: #176466 !important; background: #e3f4f2; }
-@media (max-width: 760px) { .admin-shell { grid-template-columns: 68px minmax(0, 1fr); } .admin-brand { justify-content: center; padding-inline: 0; font-size: 0; } .admin-shell > aside button { justify-content: center; font-size: 0; } .admin-metrics { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 900px) { .contacts-layout { grid-template-columns: 1fr; } .contacts-list-card { grid-column: auto; } .contacts-grid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .admin-shell { grid-template-columns: 68px minmax(0, 1fr); } .admin-brand { justify-content: center; padding-inline: 0; font-size: 0; } .admin-shell > aside button { justify-content: center; font-size: 0; } .admin-metrics { grid-template-columns: repeat(2, 1fr); } .contacts-workspace { grid-column: 1 / -1; padding: 88px 14px 28px; } .contacts-hero, .contacts-list-heading { align-items: stretch; flex-direction: column; } .contacts-hero-actions { align-items: stretch; flex-direction: column-reverse; } .my-username { width: 100%; } .request-columns { grid-template-columns: 1fr; } }
 .app { height: 100vh; }
 .workspace {
   height: 100%;

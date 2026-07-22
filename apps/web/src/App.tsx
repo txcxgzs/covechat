@@ -56,6 +56,7 @@ import { playUiSound, setUiSoundsEnabled, uiSoundsEnabled } from "./ui-feedback"
 import { createReplyReference, type ReplyReference } from "./security/message-content";
 import { installUiRipple } from "./ui-ripple";
 import { Button, IconButton } from "./ui-controls";
+import { ContactsWorkspace } from "./ContactsWorkspace";
 
 /// 将字节数格式化为人类可读的 KB/MB 字符串。
 /// 用于附件上传进度显示。1024 进制，保留 1 位小数（< 1KB 时显示整数）。
@@ -65,7 +66,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-type AppView = "messages" | "groups" | "settings" | "profile";
+type AppView = "messages" | "contacts" | "groups" | "settings" | "profile";
 type WallpaperStyle = "cove" | "plain" | "midnight";
 const NOOP_SELECT_MESSAGE = () => undefined;
 
@@ -92,6 +93,7 @@ function Navigation({ locale, t, onLocaleChange, profileName, activeView, onView
 }) {
   const nav = [
     { id: "messages" as const, label: t("messages"), icon: MessageCircle },
+    { id: "contacts" as const, label: t("contacts"), icon: UserRound },
     { id: "groups" as const, label: t("groups"), icon: UsersRound },
     { id: "settings" as const, label: t("settings"), icon: Settings },
   ];
@@ -1403,6 +1405,8 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
             {mobilePanelOpen ? <button className="mobile-panel-scrim" aria-label={locale === "zh-CN" ? "关闭菜单" : "Close menu"} onClick={() => setMobilePanelOpen(false)} /> : null}
             <SecurityPanel lastReceivedText={lastReceivedText} open={detailsOpen} onClose={() => { playUiSound("open"); setDetailsOpen(false); }} locale={locale} profile={profile} recipient={recipient} session={session} t={t} />
           </>
+        ) : activeView === "contacts" ? (
+          <ContactsWorkspace locale={locale} session={session} username={profile.username} onChat={(username) => { setRecipient(username); setActiveView("messages"); }} />
         ) : activeView === "groups" ? (
           <GroupWorkspace locale={locale} profile={profile} session={session} t={t} />
         ) : activeView === "settings" ? (

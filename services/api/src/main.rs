@@ -494,6 +494,17 @@ fn router(state: AppState) -> Router {
         .route("/v1/backups/latest", get(read_latest_backup))
         .route("/v1/backups", put(store_backup))
         .route("/v1/reports", post(create_abuse_report))
+        .route("/v1/contacts", get(list_contacts))
+        .route("/v1/contacts/{username}", delete(delete_contact))
+        .route("/v1/contact-requests", get(list_contact_requests))
+        .route(
+            "/v1/contact-requests/{username}",
+            post(create_contact_request).delete(delete_contact_request),
+        )
+        .route(
+            "/v1/contact-requests/{username}/accept",
+            post(accept_contact_request),
+        )
         .route("/v1/management/overview", get(admin_overview))
         .route("/v1/management/accounts", get(admin_accounts))
         .route("/v1/management/devices", get(admin_devices))
@@ -552,6 +563,167 @@ async fn health() -> Json<serde_json::Value> {
         "securityStatus": "experimental-unaudited",
         "plaintextAccepted": false
     }))
+}
+
+fn authenticated_username(headers: &HeaderMap, store: &mut Store) -> Option<String> {
+    let device_id = authenticated_device(headers, store)?;
+    store
+        .devices
+        .get(&device_id)
+        .map(|device| device.username.clone())
+}
+
+async fn list_contacts(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let username = {
+        let mut store = state.inner.lock().await;
+        match authenticated_username(&headers, &mut store) {
+            Some(value) => value,
+            None => return StatusCode::UNAUTHORIZED.into_response(),
+        }
+    };
+    let Some(database) = &state.persistence else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match database.list_contacts(&username).await {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn list_contact_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let username = {
+        let mut store = state.inner.lock().await;
+        match authenticated_username(&headers, &mut store) {
+            Some(value) => value,
+            None => return StatusCode::UNAUTHORIZED.into_response(),
+        }
+    };
+    let Some(database) = &state.persistence else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match database.list_contact_requests(&username).await {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn create_contact_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(other): Path<String>,
+) -> impl IntoResponse {
+    if !valid_username(&other) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if authenticated_rate_limit(&state, &headers, "contact_request", 30, 3600)
+        .await
+        .is_err()
+    {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    let username = {
+        let mut store = state.inner.lock().await;
+        let Some(username) = authenticated_username(&headers, &mut store) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        if username == other {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+        if !store.accounts.contains_key(&other) {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        if store.blocks.contains(&(username.clone(), other.clone()))
+            || store.blocks.contains(&(other.clone(), username.clone()))
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        username
+    };
+    let Some(database) = &state.persistence else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match database.create_contact_request(&username, &other).await {
+        Ok(status) => (StatusCode::OK, Json(serde_json::json!({"status": status}))).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+async fn accept_contact_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(sender): Path<String>,
+) -> impl IntoResponse {
+    if !valid_username(&sender) {
+        return StatusCode::BAD_REQUEST;
+    }
+    let recipient = {
+        let mut store = state.inner.lock().await;
+        match authenticated_username(&headers, &mut store) {
+            Some(value) => value,
+            None => return StatusCode::UNAUTHORIZED,
+        }
+    };
+    let Some(database) = &state.persistence else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    match database.accept_contact_request(&sender, &recipient).await {
+        Ok(true) => StatusCode::NO_CONTENT,
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn delete_contact_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(other): Path<String>,
+) -> impl IntoResponse {
+    if !valid_username(&other) {
+        return StatusCode::BAD_REQUEST;
+    }
+    let username = {
+        let mut store = state.inner.lock().await;
+        match authenticated_username(&headers, &mut store) {
+            Some(value) => value,
+            None => return StatusCode::UNAUTHORIZED,
+        }
+    };
+    let Some(database) = &state.persistence else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    match database.delete_contact_request(&username, &other).await {
+        Ok(true) => StatusCode::NO_CONTENT,
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+async fn delete_contact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(other): Path<String>,
+) -> impl IntoResponse {
+    if !valid_username(&other) {
+        return StatusCode::BAD_REQUEST;
+    }
+    let username = {
+        let mut store = state.inner.lock().await;
+        match authenticated_username(&headers, &mut store) {
+            Some(value) => value,
+            None => return StatusCode::UNAUTHORIZED,
+        }
+    };
+    let Some(database) = &state.persistence else {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    };
+    match database.delete_contact(&username, &other).await {
+        Ok(true) => StatusCode::NO_CONTENT,
+        Ok(false) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 fn admin_authorized(headers: &HeaderMap) -> bool {
@@ -3520,5 +3692,14 @@ mod tests {
             "9wL7j80bwK0v2N8zQ4L5f1dU7pR3mX6d"
         ));
         assert!(!admin_token_matches(secret, ""));
+    }
+
+    #[tokio::test]
+    async fn contact_request_does_not_enumerate_into_database_errors() {
+        let (state, headers, _) = authenticated_state("maya_chen");
+        let response = create_contact_request(State(state), headers, Path("missing_user".into()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

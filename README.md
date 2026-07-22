@@ -272,6 +272,17 @@ docker compose --env-file .env -f compose.deploy.yml up -d --build web api
 
 个人中心入口位于左下角头像，提供恢复码、备份版本、设备撤销、本地解锁口令修改、锁定退出和清除本机数据。单条消息举报位于消息右键或长按菜单；确认后才会把该条消息明文提交给管理员。
 
+## 好友与联系人
+
+每个账户在首次创建时选择唯一用户名，格式为 3–32 位小写字母、数字或下划线，例如 `alice_01`。登录后打开左侧“联系人”：
+
+1. 顶部“我的用户名”可复制并发送给认识的人。
+2. 输入对方的完整用户名进行精确查找并发送好友申请。
+3. 双方可以接受、拒绝或取消申请；双方同时申请时自动成为好友。
+4. 好友卡片可直接进入端到端加密聊天，也可以删除好友而保留本地历史消息。
+
+联系人关系和申请保存在 PostgreSQL；好友申请受到认证、拉黑关系检查和 Redis 频率限制保护。系统不提供模糊的全站用户枚举搜索，以减少用户名批量收集风险。
+
 ## English quick start
 
 CoveChat is experimental, unaudited end-to-end encrypted chat software. Do not use `0.x` for high-risk communications.

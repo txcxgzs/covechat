@@ -15,6 +15,125 @@ pub struct Persistence {
 }
 
 impl Persistence {
+    pub async fn list_contacts(&self, username: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+        let rows = sqlx::query(
+            "SELECT CASE WHEN username_low = $1 THEN username_high ELSE username_low END AS username,
+                    extract(epoch from created_at)::bigint AS created_at
+             FROM contacts WHERE username_low = $1 OR username_high = $1 ORDER BY created_at DESC",
+        ).bind(username).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|row| serde_json::json!({
+            "username": row.get::<String, _>("username"), "createdAt": row.get::<i64, _>("created_at")
+        })).collect())
+    }
+
+    pub async fn list_contact_requests(&self, username: &str) -> anyhow::Result<serde_json::Value> {
+        let incoming = sqlx::query("SELECT sender_username AS username, extract(epoch from created_at)::bigint AS created_at FROM contact_requests WHERE recipient_username = $1 ORDER BY created_at DESC")
+            .bind(username).fetch_all(&self.pool).await?;
+        let outgoing = sqlx::query("SELECT recipient_username AS username, extract(epoch from created_at)::bigint AS created_at FROM contact_requests WHERE sender_username = $1 ORDER BY created_at DESC")
+            .bind(username).fetch_all(&self.pool).await?;
+        let map = |rows: Vec<sqlx::postgres::PgRow>| {
+            rows.into_iter().map(|row| serde_json::json!({
+            "username": row.get::<String, _>("username"), "createdAt": row.get::<i64, _>("created_at")
+        })).collect::<Vec<_>>()
+        };
+        Ok(serde_json::json!({"incoming": map(incoming), "outgoing": map(outgoing)}))
+    }
+
+    pub async fn create_contact_request(
+        &self,
+        sender: &str,
+        recipient: &str,
+    ) -> anyhow::Result<&'static str> {
+        let (low, high) = if sender < recipient {
+            (sender, recipient)
+        } else {
+            (recipient, sender)
+        };
+        if sqlx::query("SELECT 1 FROM contacts WHERE username_low = $1 AND username_high = $2")
+            .bind(low)
+            .bind(high)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some()
+        {
+            return Ok("contact");
+        }
+        if sqlx::query(
+            "SELECT 1 FROM contact_requests WHERE sender_username = $1 AND recipient_username = $2",
+        )
+        .bind(recipient)
+        .bind(sender)
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some()
+        {
+            self.accept_contact_request(recipient, sender).await?;
+            return Ok("accepted");
+        }
+        sqlx::query("INSERT INTO contact_requests(sender_username, recipient_username) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(sender).bind(recipient).execute(&self.pool).await?;
+        Ok("pending")
+    }
+
+    pub async fn accept_contact_request(
+        &self,
+        sender: &str,
+        recipient: &str,
+    ) -> anyhow::Result<bool> {
+        let mut transaction = self.pool.begin().await?;
+        let deleted = sqlx::query(
+            "DELETE FROM contact_requests WHERE sender_username = $1 AND recipient_username = $2",
+        )
+        .bind(sender)
+        .bind(recipient)
+        .execute(&mut *transaction)
+        .await?;
+        if deleted.rows_affected() == 0 {
+            transaction.rollback().await?;
+            return Ok(false);
+        }
+        let (low, high) = if sender < recipient {
+            (sender, recipient)
+        } else {
+            (recipient, sender)
+        };
+        sqlx::query("INSERT INTO contacts(username_low, username_high) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(low).bind(high).execute(&mut *transaction).await?;
+        sqlx::query(
+            "DELETE FROM contact_requests WHERE sender_username = $1 AND recipient_username = $2",
+        )
+        .bind(recipient)
+        .bind(sender)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn delete_contact_request(
+        &self,
+        username: &str,
+        other: &str,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query("DELETE FROM contact_requests WHERE (sender_username = $1 AND recipient_username = $2) OR (sender_username = $2 AND recipient_username = $1)")
+            .bind(username).bind(other).execute(&self.pool).await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete_contact(&self, username: &str, other: &str) -> anyhow::Result<bool> {
+        let (low, high) = if username < other {
+            (username, other)
+        } else {
+            (other, username)
+        };
+        let result =
+            sqlx::query("DELETE FROM contacts WHERE username_low = $1 AND username_high = $2")
+                .bind(low)
+                .bind(high)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected() > 0)
+    }
     pub async fn admin_overview(&self) -> anyhow::Result<serde_json::Value> {
         let row = sqlx::query(
             "SELECT
