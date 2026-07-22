@@ -8,6 +8,8 @@ export default defineConfig(({ mode }) => {
   const webHost = process.env.COVECHAT_WEB_HOST || env.COVECHAT_WEB_HOST || "127.0.0.1";
   const webPort = Number.parseInt(process.env.COVECHAT_WEB_PORT || env.COVECHAT_WEB_PORT || "5173", 10);
   const apiOrigin = process.env.COVECHAT_API_ORIGIN || env.COVECHAT_API_ORIGIN || "http://127.0.0.1:8080";
+  const adminPath = process.env.VITE_ADMIN_PATH || env.VITE_ADMIN_PATH || "/manage-cove";
+  const escapedAdminPath = adminPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return {
   plugins: [
     react(),
@@ -34,7 +36,7 @@ export default defineConfig(({ mode }) => {
       },
       workbox: {
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
-        navigateFallbackDenylist: [/^\/api\//],
+        navigateFallbackDenylist: [/^\/api\//, new RegExp(`^${escapedAdminPath}\/?$`)],
         runtimeCaching: []
       }
     })
