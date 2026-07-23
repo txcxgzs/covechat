@@ -1,6 +1,6 @@
-import { FormEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BellOff, Check, CheckCheck, CheckCircle2, CircleHelp, Copy as CopyIcon, FileText, FileWarning, FlaskConical, Image,
+  BellOff, Check, CheckCheck, CheckCircle2, ChevronRight, CircleHelp, Copy as CopyIcon, FileText, FileWarning, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Palette, Paperclip, Plus, Search, Send,
   Languages, Reply, Settings, ShieldCheck, Smile, Sparkles, Trash2, UserRound, UsersRound, Volume2, VolumeX, X
 } from "lucide-react";
@@ -57,6 +57,7 @@ import { installUiRipple } from "./ui-ripple";
 import { Button, IconButton } from "./ui-controls";
 import { ContactsWorkspace } from "./ContactsWorkspace";
 import { ProfileWorkspace } from "./ProfileWorkspace";
+import { isConversationMuted, setConversationMuted } from "./conversation-preferences";
 
 /// 将字节数格式化为人类可读的 KB/MB 字符串。
 /// 用于附件上传进度显示。1024 进制，保留 1 位小数（< 1KB 时显示整数）。
@@ -180,11 +181,15 @@ function ConversationList({ historyRevision, locale, onSelect, profile, recipien
   );
 }
 
-function ChatHeader({ onDetails, onMenu, recipient, onRecipientChange, t }: {
+function ChatHeader({ muted, onDetails, onMenu, onMuteToggle, onSearchToggle, recipient, onRecipientChange, searchOpen, t }: {
+  muted: boolean;
   onDetails: () => void;
   onMenu: () => void;
+  onMuteToggle: () => void;
+  onSearchToggle: () => void;
   recipient: string;
   onRecipientChange: (value: string) => void;
+  searchOpen: boolean;
   t: Translate;
 }) {
   return (
@@ -201,8 +206,8 @@ function ChatHeader({ onDetails, onMenu, recipient, onRecipientChange, t }: {
         <span><LockKeyhole /> {t("endToEndEncrypted")}</span>
       </div>
       <div className="header-actions">
-        <IconButton aria-label={t("searchConversation")}><Search /></IconButton>
-        <IconButton aria-label={t("muteConversation")}><BellOff /></IconButton>
+        <IconButton className={searchOpen ? "active" : ""} aria-label={t("searchConversation")} aria-pressed={searchOpen} onClick={onSearchToggle}><Search /></IconButton>
+        <IconButton className={muted ? "active" : ""} aria-label={muted ? t("unmuteConversation") : t("muteConversation")} aria-pressed={muted} onClick={onMuteToggle}>{muted ? <VolumeX /> : <BellOff />}</IconButton>
         <IconButton aria-label={t("showSecurityDetails")} onClick={onDetails}><CircleHelp /></IconButton>
       </div>
     </header>
@@ -308,12 +313,14 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
   );
 }
 
-function InteractiveMessage({ locale, message, onReply, onReport, onSelect = NOOP_SELECT_MESSAGE, selected = false, selectionMode = false }: {
+function InteractiveMessage({ activeSearchMatch = false, locale, message, onReply, onReport, onSelect = NOOP_SELECT_MESSAGE, searchMatch = false, selected = false, selectionMode = false }: {
+  activeSearchMatch?: boolean;
   locale: Locale;
   message: Message;
   onReply: (message: Message) => void;
   onReport?: (message: Message) => void;
   onSelect?: (messageId: string) => void;
+  searchMatch?: boolean;
   selected?: boolean;
   selectionMode?: boolean;
 }) {
@@ -332,7 +339,8 @@ function InteractiveMessage({ locale, message, onReply, onReport, onSelect = NOO
 
   return (
     <article
-      className={`message-row ${message.from} interactive-message ${selected ? "message-selected" : ""}`}
+      className={`message-row ${message.from} interactive-message ${selected ? "message-selected" : ""} ${searchMatch ? "message-search-match" : ""} ${activeSearchMatch ? "message-search-active" : ""}`}
+      data-message-id={message.id}
       style={{
         "--swipe-offset": `${swipeOffset}px`,
         "--swipe-progress": Math.min(1, Math.abs(swipeOffset) / 52),
@@ -422,6 +430,47 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
   } | null>(null);
   // 上传失败时保留待重试的文件；重试成功或取消后清空。
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery.trim().toLocaleLowerCase(locale));
+  const [activeSearchIndex, setActiveSearchIndex] = useState(0);
+  const [muted, setMuted] = useState(() => isConversationMuted(profile.username, recipient));
+  const mutedRef = useRef(muted);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const searchMatches = useMemo(() => deferredSearchQuery
+    ? messages.filter((message) => message.text.toLocaleLowerCase(locale).includes(deferredSearchQuery)).map((message) => message.id)
+    : [], [deferredSearchQuery, locale, messages]);
+  const activeSearchId = searchMatches[Math.min(activeSearchIndex, Math.max(0, searchMatches.length - 1))];
+
+  useEffect(() => {
+    setMuted(isConversationMuted(profile.username, recipient));
+    setSearchOpen(false); setSearchQuery(""); setActiveSearchIndex(0);
+  }, [profile.username, recipient]);
+
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    requestAnimationFrame(() => searchInput.current?.focus());
+  }, [searchOpen]);
+
+  function navigateSearch(direction: -1 | 1) {
+    if (searchMatches.length === 0) return;
+    const next = (activeSearchIndex + direction + searchMatches.length) % searchMatches.length;
+    setActiveSearchIndex(next);
+    document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(searchMatches[next])}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function toggleMute() {
+    if (!recipient) return;
+    const next = !muted;
+    setConversationMuted(profile.username, recipient, next);
+    setMuted(next);
+    setAttachmentStatus(next ? t("conversationMuted") : t("conversationUnmuted"));
+    playUiSound("success");
+  }
   useEffect(() => {
     setSelectedIds(new Set());
     setReplyTo(undefined);
@@ -528,7 +577,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
       const lastText = [...visible].reverse().find((message) => message.body)?.body;
       if (lastText) {
         onReceivedText(lastText);
-        playUiSound("receive");
+        if (!mutedRef.current) playUiSound("receive");
       }
       setAttachments((current) => {
         const known = new Set(current.map((attachment) => attachment.objectId));
@@ -650,12 +699,17 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
   return (
     <main className="chat">
       <ChatHeader
+        muted={muted}
         onDetails={onDetails}
         onMenu={onMenu}
+        onMuteToggle={toggleMute}
+        onSearchToggle={() => setSearchOpen((open) => !open)}
         onRecipientChange={onRecipientChange}
         recipient={recipient}
+        searchOpen={searchOpen}
         t={t}
       />
+      {searchOpen ? <div className="conversation-search-bar" role="search"><Search /><input ref={searchInput} aria-label={t("searchConversation")} value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setActiveSearchIndex(0); }} placeholder={t("searchMessagesPlaceholder")} /><span>{searchQuery ? (searchMatches.length ? t("searchResultCount").replace("{current}", String(Math.min(activeSearchIndex + 1, searchMatches.length))).replace("{total}", String(searchMatches.length)) : t("noSearchResults")) : ""}</span><IconButton aria-label={t("previousSearchResult")} disabled={searchMatches.length === 0} onClick={() => navigateSearch(-1)}><ChevronRight className="search-previous" /></IconButton><IconButton aria-label={t("nextSearchResult")} disabled={searchMatches.length === 0} onClick={() => navigateSearch(1)}><ChevronRight /></IconButton><IconButton aria-label={t("closeSearch")} onClick={() => { setSearchOpen(false); setSearchQuery(""); }}><X /></IconButton></div> : null}
       {selectedIds.size > 0 ? (
         <div className="selection-toolbar" role="toolbar" aria-label={locale === "zh-CN" ? "消息批量操作" : "Message actions"}>
           <IconButton aria-label={locale === "zh-CN" ? "取消选择" : "Cancel selection"} onClick={() => setSelectedIds(new Set())}><X /></IconButton>
@@ -688,6 +742,8 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
           key={message.id}
           locale={locale}
           message={message}
+          searchMatch={searchMatches.includes(message.id)}
+          activeSearchMatch={message.id === activeSearchId}
           onReply={setReplyTo}
           onReport={reportMessage}
           onSelect={toggleMessageSelection}
