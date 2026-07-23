@@ -3685,13 +3685,12 @@ mod tests {
 
     #[test]
     fn admin_token_requires_exact_secret() {
-        let secret = "9wL7j80bwK0v2N8zQ4L5f1dU7pR3mX6c";
-        assert!(admin_token_matches(secret, secret));
-        assert!(!admin_token_matches(
-            secret,
-            "9wL7j80bwK0v2N8zQ4L5f1dU7pR3mX6d"
-        ));
-        assert!(!admin_token_matches(secret, ""));
+        // Build synthetic values at runtime so tests never resemble committed credentials.
+        let secret = format!("test-admin-token-{}", "a".repeat(32));
+        let different = format!("test-admin-token-{}", "b".repeat(32));
+        assert!(admin_token_matches(&secret, &secret));
+        assert!(!admin_token_matches(&secret, &different));
+        assert!(!admin_token_matches(&secret, ""));
     }
 
     #[tokio::test]
