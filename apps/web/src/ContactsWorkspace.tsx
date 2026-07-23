@@ -21,6 +21,7 @@ export function ContactsWorkspace({ locale, onChat, session, username }: {
   const [filter, setFilter] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(true);
+  const [pendingRemoval, setPendingRemoval] = useState("");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -57,8 +58,8 @@ export function ContactsWorkspace({ locale, onChat, session, username }: {
   async function accept(other: string) { await acceptContactRequest(other, session); await refresh(); }
   async function dismiss(other: string) { await removeContactRequest(other, session); await refresh(); }
   async function remove(other: string) {
-    if (!window.confirm(zh ? `确认删除好友 ${other}？历史消息不会被删除。` : `Remove ${other}? Message history will remain.`)) return;
     await removeContact(other, session); await refresh();
+    setPendingRemoval("");
   }
 
   return <main className="contacts-workspace">
@@ -81,8 +82,9 @@ export function ContactsWorkspace({ locale, onChat, session, username }: {
 
       <section className="contacts-list-card">
         <div className="contacts-list-heading"><div className="contact-card-heading"><span><UsersRound /></span><div><h2>{zh ? "我的好友" : "My friends"}</h2><p>{contacts.length} {zh ? "位联系人" : "contacts"}</p></div></div><label><Search /><input aria-label={zh ? "筛选好友" : "Filter contacts"} value={filter} onChange={(event) => setFilter(event.target.value.toLowerCase())} placeholder={zh ? "筛选好友" : "Filter contacts"} /></label></div>
-        <div className="contacts-grid">{visibleContacts.map((contact) => <article key={contact.username}><span className="avatar">{contact.username.slice(0, 2).toUpperCase()}</span><div><strong>@{contact.username}</strong><small>{zh ? "端到端加密联系人" : "End-to-end encrypted contact"}</small></div><Button size="small" icon={<MessageCircle />} onClick={() => onChat(contact.username)}>{zh ? "发消息" : "Message"}</Button><IconButton aria-label={zh ? "删除好友" : "Remove friend"} onClick={() => void remove(contact.username)}><Trash2 /></IconButton></article>)}{!loading && !visibleContacts.length ? <div className="contacts-empty"><UserRound /><strong>{filter ? (zh ? "没有匹配的好友" : "No matching contacts") : (zh ? "还没有好友" : "No contacts yet")}</strong><p>{zh ? "在上方输入对方的用户名，发送第一个好友申请。" : "Search for a username above to send your first request."}</p></div> : null}</div>
+        <div className="contacts-grid">{visibleContacts.map((contact) => <article key={contact.username}><span className="avatar">{contact.username.slice(0, 2).toUpperCase()}</span><div><strong>@{contact.username}</strong><small>{zh ? "端到端加密联系人" : "End-to-end encrypted contact"}</small></div><Button size="small" icon={<MessageCircle />} onClick={() => onChat(contact.username)}>{zh ? "发消息" : "Message"}</Button><IconButton aria-label={zh ? "删除好友" : "Remove friend"} onClick={() => setPendingRemoval(contact.username)}><Trash2 /></IconButton></article>)}{!loading && !visibleContacts.length ? <div className="contacts-empty"><UserRound /><strong>{filter ? (zh ? "没有匹配的好友" : "No matching contacts") : (zh ? "还没有好友" : "No contacts yet")}</strong><p>{zh ? "在上方输入对方的用户名，发送第一个好友申请。" : "Search for a username above to send your first request."}</p></div> : null}</div>
       </section>
     </div>
+    {pendingRemoval ? <div className="account-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPendingRemoval(""); }}><section className="account-dialog compact-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-contact-title"><IconButton className="account-dialog-close" aria-label={zh ? "关闭" : "Close"} onClick={() => setPendingRemoval("")}><X /></IconButton><span className="dialog-symbol danger-symbol"><Trash2 /></span><h2 id="remove-contact-title">{zh ? `删除好友 @${pendingRemoval}？` : `Remove @${pendingRemoval}?`}</h2><p>{zh ? "这会从联系人列表中移除对方，但不会删除本设备已有的历史消息。以后仍可重新发送好友申请。" : "This removes the person from contacts without deleting message history on this device. You can send another request later."}</p><footer><Button variant="secondary" onClick={() => setPendingRemoval("")}>{zh ? "取消" : "Cancel"}</Button><Button variant="danger" icon={<Trash2 />} onClick={() => void remove(pendingRemoval)}>{zh ? "删除好友" : "Remove friend"}</Button></footer></section></div> : null}
   </main>;
 }

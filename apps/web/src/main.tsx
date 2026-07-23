@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AdminApp } from "./AdminApp";
 import { initializePwaUpdates } from "./pwa-updates";
+import "@fontsource-variable/manrope";
+import "@fontsource-variable/noto-sans-sc";
 import "./styles.css";
 
 const adminPath = (import.meta.env.VITE_ADMIN_PATH || "/manage-cove").replace(/\/$/, "");

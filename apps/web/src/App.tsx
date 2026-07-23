@@ -1,4 +1,5 @@
 import { FormEvent, type CSSProperties, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   BellOff, Check, CheckCheck, CheckCircle2, ChevronRight, CircleHelp, Copy as CopyIcon, FileText, FileWarning, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Palette, Paperclip, Plus, Search, Send,
@@ -146,9 +147,10 @@ function MobileBottomNavigation({ activeView, onViewChange, t }: {
   </nav>;
 }
 
-function ConversationList({ historyRevision, locale, onSelect, profile, recipient, t }: {
+function ConversationList({ historyRevision, locale, onNew, onSelect, profile, recipient, t }: {
   historyRevision: number;
   locale: Locale;
+  onNew: () => void;
   onSelect: (username: string) => void;
   profile: SecureProfile;
   recipient: string;
@@ -177,7 +179,7 @@ function ConversationList({ historyRevision, locale, onSelect, profile, recipien
     <aside className="conversations">
       <div className="section-heading">
         <h1>{t("messages")}</h1>
-        <IconButton aria-label={t("newConversation")} onClick={() => onSelect("")}><Plus /></IconButton>
+        <IconButton className="new-conversation-trigger" aria-label={t("newConversation")} onClick={onNew}><Plus /></IconButton>
       </div>
       <label className="search">
         <Search aria-hidden="true" />
@@ -199,34 +201,31 @@ function ConversationList({ historyRevision, locale, onSelect, profile, recipien
   );
 }
 
-function ChatHeader({ muted, onDetails, onMenu, onMuteToggle, onSearchToggle, recipient, onRecipientChange, searchOpen, t }: {
+function ChatHeader({ muted, onDetails, onMenu, onMuteToggle, onNewConversation, onSearchToggle, recipient, searchOpen, t }: {
   muted: boolean;
   onDetails: () => void;
   onMenu: () => void;
   onMuteToggle: () => void;
+  onNewConversation: () => void;
   onSearchToggle: () => void;
   recipient: string;
-  onRecipientChange: (value: string) => void;
   searchOpen: boolean;
   t: Translate;
 }) {
   return (
     <header className="chat-header">
       <IconButton className="mobile-menu" aria-label={t("openNavigation")} onClick={onMenu}><Menu /></IconButton>
-      <span className="avatar">{recipient.slice(0, 2).toUpperCase() || "@"}</span>
+      <span className="avatar">{recipient.slice(0, 2).toUpperCase() || "CC"}</span>
       <div className="chat-title">
-        <input
-          aria-label={t("username")}
-          placeholder={t("username")}
-          value={recipient}
-          onChange={(event) => onRecipientChange(event.target.value.toLowerCase())}
-        />
-        <span><LockKeyhole /> {t("endToEndEncrypted")}</span>
+        <strong>{recipient ? `@${recipient}` : t("messages")}</strong>
+        <span>{recipient ? <><LockKeyhole /> {t("endToEndEncrypted")}</> : t("newConversation")}</span>
       </div>
       <div className="header-actions">
-        <IconButton className={searchOpen ? "active" : ""} aria-label={t("searchConversation")} aria-pressed={searchOpen} onClick={onSearchToggle}><Search /></IconButton>
-        <IconButton className={muted ? "active" : ""} aria-label={muted ? t("unmuteConversation") : t("muteConversation")} aria-pressed={muted} onClick={onMuteToggle}>{muted ? <VolumeX /> : <BellOff />}</IconButton>
-        <IconButton aria-label={t("showSecurityDetails")} onClick={onDetails}><CircleHelp /></IconButton>
+        {recipient ? <>
+          <IconButton className={searchOpen ? "active" : ""} aria-label={t("searchConversation")} aria-pressed={searchOpen} onClick={onSearchToggle}><Search /></IconButton>
+          <IconButton className={muted ? "active" : ""} aria-label={muted ? t("unmuteConversation") : t("muteConversation")} aria-pressed={muted} onClick={onMuteToggle}>{muted ? <VolumeX /> : <BellOff />}</IconButton>
+          <IconButton aria-label={t("showSecurityDetails")} onClick={onDetails}><CircleHelp /></IconButton>
+        </> : <Button size="small" icon={<Plus />} onClick={onNewConversation}>{t("newConversation")}</Button>}
       </div>
     </header>
   );
@@ -421,15 +420,15 @@ function InteractiveMessage({ activeSearchMatch = false, locale, message, onRepl
   );
 }
 
-function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRecipientChange, profile, recipient, session, t }: {
+function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, onReceivedText, profile, recipient, session, t }: {
   locale: Locale;
   onDetails: () => void;
   onMenu: () => void;
+  onNewConversation: () => void;
   profile: SecureProfile;
   session: AuthSession;
   t: Translate;
   recipient: string;
-  onRecipientChange: (recipient: string) => void;
   onReceivedText: (text: string) => void;
   onHistoryChange: () => void;
 }) {
@@ -449,6 +448,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
   // 上传失败时保留待重试的文件；重试成功或取消后清空。
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [reportCandidate, setReportCandidate] = useState<Message>();
   const [searchQuery, setSearchQuery] = useState("");
   const deferredSearchQuery = useDeferredValue(searchQuery.trim().toLocaleLowerCase(locale));
   const [activeSearchIndex, setActiveSearchIndex] = useState(0);
@@ -656,11 +656,15 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
     }
   }
   async function reportMessage(message: Message) {
-    if (!window.confirm(locale === "zh-CN" ? "举报会把这条消息的明文主动提交给管理员审核。确认继续？" : "Reporting explicitly discloses this message to administrators. Continue?")) return;
+    setReportCandidate(message);
+  }
+  async function submitReport() {
+    if (!reportCandidate) return;
     try {
-      await submitAbuseReport(profile, session, recipient, JSON.stringify({ message: message.text, messageId: message.id }), "user-selected message");
+      await submitAbuseReport(profile, session, recipient, JSON.stringify({ message: reportCandidate.text, messageId: reportCandidate.id }), "user-selected message");
       setAttachmentStatus(locale === "zh-CN" ? "举报已提交" : "Report submitted");
     } catch { setAttachmentStatus(locale === "zh-CN" ? "举报提交失败" : "Report submission failed"); }
+    finally { setReportCandidate(undefined); }
   }
   async function uploadAttachment(file: File) {
     if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
@@ -721,8 +725,8 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
         onDetails={onDetails}
         onMenu={onMenu}
         onMuteToggle={toggleMute}
+        onNewConversation={onNewConversation}
         onSearchToggle={() => setSearchOpen((open) => !open)}
-        onRecipientChange={onRecipientChange}
         recipient={recipient}
         searchOpen={searchOpen}
         t={t}
@@ -742,7 +746,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
           <IconButton className="danger" aria-label={locale === "zh-CN" ? "从本设备删除" : "Delete from this device"} onClick={() => void deleteSelectedMessages()}><Trash2 /></IconButton>
         </div>
       ) : null}
-      <div className="disappearing-control">
+      {recipient ? <div className="disappearing-control">
         <LockKeyhole />
         <label>
           {locale === "zh-CN" ? "定时消失" : "Disappearing messages"}
@@ -753,9 +757,16 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
             <option value={604800}>{locale === "zh-CN" ? "7 天" : "7 days"}</option>
           </select>
         </label>
-      </div>
+      </div> : null}
       <section className="messages" aria-label="Encrypted conversation" aria-live="polite">
-        <div className="date-rule"><span>{t("today")}</span></div>
+        {recipient ? <div className="date-rule"><span>{t("today")}</span></div> : (
+          <div className="conversation-empty-state">
+            <span className="conversation-empty-icon"><MessageCircle /></span>
+            <h2>{locale === "zh-CN" ? "开始一段私密对话" : "Start a private conversation"}</h2>
+            <p>{locale === "zh-CN" ? "通过对方的用户名查找联系人。用户名只用于发现，消息内容仍保持端到端加密。" : "Find someone by username. Usernames are only for discovery; message content remains end-to-end encrypted."}</p>
+            <Button icon={<Plus />} onClick={onNewConversation}>{t("newConversation")}</Button>
+          </div>
+        )}
         {messages.map((message) => <InteractiveMessage
           key={message.id}
           locale={locale}
@@ -812,13 +823,14 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onReceivedText, onRe
           </div>
         ) : null}
       </section>
-      <Composer
+      {recipient ? <Composer
         t={t}
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(undefined)}
         onAttachment={(file) => void uploadAttachment(file)}
         onSend={(text, reply) => void sendText(text, reply)}
-      />
+      /> : null}
+      {reportCandidate ? <div className="account-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setReportCandidate(undefined); }}><section className="account-dialog compact-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="report-message-title"><IconButton className="account-dialog-close" aria-label={locale === "zh-CN" ? "关闭" : "Close"} onClick={() => setReportCandidate(undefined)}><X /></IconButton><span className="dialog-symbol danger-symbol"><FileWarning /></span><h2 id="report-message-title">{locale === "zh-CN" ? "举报这条消息？" : "Report this message?"}</h2><p>{locale === "zh-CN" ? "只有你主动确认后，这条消息的明文才会提交给管理员审核。其他聊天内容不会被附带。" : "Only this message plaintext is disclosed to administrators after you confirm. No other conversation content is included."}</p><blockquote className="report-message-preview">{reportCandidate.text}</blockquote><footer><Button variant="secondary" onClick={() => setReportCandidate(undefined)}>{locale === "zh-CN" ? "取消" : "Cancel"}</Button><Button variant="danger" icon={<FileWarning />} onClick={() => void submitReport()}>{locale === "zh-CN" ? "确认举报" : "Submit report"}</Button></footer></section></div> : null}
     </main>
   );
 }
@@ -844,6 +856,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
   const [mobileGroupsOpen, setMobileGroupsOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message>();
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [pendingGroupAction, setPendingGroupAction] = useState<{ kind: "remove" | "transfer" | "leave"; memberDeviceId?: string }>();
   const groupTextInput = useRef<HTMLTextAreaElement>(null);
   const groupNameInput = useRef<HTMLInputElement>(null);
   const selected = availableGroups.find((group) => group.groupId === selectedGroupId);
@@ -981,7 +994,6 @@ function GroupWorkspace({ locale, profile, session, t }: {
       setStatus(t("cannotRemoveSelf"));
       return;
     }
-    if (!window.confirm(t("removeMemberConfirm"))) return;
     try {
       await removeGroupMember(profile, session, selected.groupId, memberDeviceId);
       refreshGroups();
@@ -1004,7 +1016,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
   }
 
   async function transferAdministration(memberDeviceId: string) {
-    if (!selected || !window.confirm(t("transferAdminConfirm"))) return;
+    if (!selected) return;
     try {
       await transferEncryptedGroupAdministration(
         profile,
@@ -1025,7 +1037,6 @@ function GroupWorkspace({ locale, profile, session, t }: {
       setStatus(t("adminTransferBeforeLeave"));
       return;
     }
-    if (!window.confirm(t("leaveGroupConfirm"))) return;
     try {
       await requestEncryptedGroupLeave(profile, session, selected.groupId);
       setStatus(t("leaveRequestSent"));
@@ -1171,7 +1182,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
                       <span className="member-avatar"><UserRound /></span>
                       <span className="member-copy"><strong>{username ? `@${username}` : t("unknownGroupMember")}</strong><small>{isSelf ? t("currentGroupMember") : t("encryptedGroupMember")}</small></span>
                       {memberIsAdmin ? <em className="admin-tag">{t("youAreAdmin")}</em> : null}
-                      {isAdmin && !isSelf ? <span className="member-actions"><button className="transfer-admin-btn" onClick={() => void transferAdministration(memberDeviceId)}>{t("transferAdmin")}</button><button className="remove-member-btn" onClick={() => void removeMember(memberDeviceId)}><Trash2 /></button></span> : null}
+                       {isAdmin && !isSelf ? <span className="member-actions"><button className="transfer-admin-btn" onClick={() => setPendingGroupAction({ kind: "transfer", memberDeviceId })}>{t("transferAdmin")}</button><button className="remove-member-btn" onClick={() => setPendingGroupAction({ kind: "remove", memberDeviceId })}><Trash2 /></button></span> : null}
                     </li>
                   );
                 })}
@@ -1184,10 +1195,20 @@ function GroupWorkspace({ locale, profile, session, t }: {
                 <label className="disabled"><input type="radio" name={`invite-policy-${selected.groupId}`} checked={(selected.invitePolicy ?? "admins") === "anyone"} disabled onChange={() => void changeInvitePolicy("anyone")} />{t("invitePolicyAnyone")}</label>
               </section>
             ) : null}
-            <section className="leave-group-section"><button className="leave-group-btn" onClick={() => void leaveGroup()}>{t("leaveGroup")}</button></section>
+            <section className="leave-group-section"><button className="leave-group-btn" onClick={() => {
+              if (isAdmin) setStatus(t("adminTransferBeforeLeave"));
+              else setPendingGroupAction({ kind: "leave" });
+            }}>{t("leaveGroup")}</button></section>
           </div>
         </aside>
       ) : null}
+      {pendingGroupAction ? <div className="account-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPendingGroupAction(undefined); }}><section className="account-dialog compact-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="group-action-title"><IconButton className="account-dialog-close" aria-label={locale === "zh-CN" ? "关闭" : "Close"} onClick={() => setPendingGroupAction(undefined)}><X /></IconButton><span className="dialog-symbol danger-symbol">{pendingGroupAction.kind === "transfer" ? <ShieldCheck /> : <Trash2 />}</span><h2 id="group-action-title">{pendingGroupAction.kind === "remove" ? t("removeMemberConfirm") : pendingGroupAction.kind === "transfer" ? t("transferAdminConfirm") : t("leaveGroupConfirm")}</h2><p>{locale === "zh-CN" ? (pendingGroupAction.kind === "remove" ? "移除后，该成员将无法解密群组的新消息；已有设备上的历史内容不会被远程擦除。" : pendingGroupAction.kind === "transfer" ? "转让后，对方将获得成员管理权限，你仍保留普通群成员身份。" : "离开后，你将不再接收群组的新消息。此操作不会删除其他成员的会话。") : (pendingGroupAction.kind === "remove" ? "The member will no longer decrypt new group messages. Existing local history is not remotely erased." : pendingGroupAction.kind === "transfer" ? "The member receives administration privileges and you remain a regular member." : "You will stop receiving new group messages. Other members keep the conversation.")}</p><footer><Button variant="secondary" onClick={() => setPendingGroupAction(undefined)}>{locale === "zh-CN" ? "取消" : "Cancel"}</Button><Button variant={pendingGroupAction.kind === "transfer" ? "primary" : "danger"} onClick={() => {
+        const action = pendingGroupAction;
+        setPendingGroupAction(undefined);
+        if (action.kind === "remove" && action.memberDeviceId) void removeMember(action.memberDeviceId);
+        else if (action.kind === "transfer" && action.memberDeviceId) void transferAdministration(action.memberDeviceId);
+        else void leaveGroup();
+      }}>{locale === "zh-CN" ? "确认操作" : "Confirm"}</Button></footer></section></div> : null}
     </main>
   );
 }
@@ -1207,6 +1228,7 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
   const [verification, setVerification] = useState<{ safetyNumber: string; verified: boolean }>();
   const [blocked, setBlocked] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
+  const [pendingSafetyAction, setPendingSafetyAction] = useState<{ kind: "revoke" | "report"; deviceId?: string }>();
   const zh = locale === "zh-CN";
   const refreshDevices = async () => {
     try {
@@ -1230,7 +1252,6 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
     }
   }, [open, recipient, session.accessToken]);
   const revoke = async (deviceId: string) => {
-    if (!window.confirm(zh ? "确认撤销这台设备？撤销后它将无法登录或接收新消息。" : "Revoke this device? It will no longer sign in or receive new messages.")) return;
     try {
       await revokeOwnDevice(deviceId, session);
       await refreshDevices();
@@ -1248,7 +1269,7 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
     }
   };
   const report = async () => {
-    if (!lastReceivedText || !window.confirm(zh ? "这会把所选消息明文主动提交给服务端审核。确认举报？" : "This explicitly discloses the selected message to moderators. Submit report?")) return;
+    if (!lastReceivedText) return;
     try {
       await submitAbuseReport(profile, session, recipient, JSON.stringify({ message: lastReceivedText }), "user-selected latest received message");
       setActionStatus(zh ? "举报已提交" : "Report submitted");
@@ -1256,7 +1277,7 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
       setActionStatus(zh ? "举报提交失败" : "Report submission failed");
     }
   };
-  return (
+  return <>
     <aside className={open ? "security-panel open" : "security-panel"} aria-label="Conversation security">
       <button className="close-details icon-button" onClick={onClose} aria-label={t("closeSecurityDetails")}><X /></button>
       <div className="security-person">
@@ -1297,7 +1318,7 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
               {device.revokedAt ? <small>{zh ? "已撤销" : "Revoked"}</small> : null}
             </div>
             {device.deviceId !== profile.deviceId && !device.revokedAt ? (
-              <button className="icon-button" onClick={() => void revoke(device.deviceId)} title={zh ? "撤销设备" : "Revoke device"}><Trash2 /></button>
+              <button className="icon-button" onClick={() => setPendingSafetyAction({ kind: "revoke", deviceId: device.deviceId })} title={zh ? "撤销设备" : "Revoke device"}><Trash2 /></button>
             ) : null}
           </div>
         ))}
@@ -1308,7 +1329,7 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
           <h3><ShieldCheck />{zh ? "隐私与安全操作" : "Privacy and safety actions"}</h3>
           <div className="security-actions">
             <button className="verify" onClick={() => void toggleBlocked()}>{blocked ? (zh ? "解除拉黑" : "Unblock") : (zh ? "拉黑用户" : "Block user")}</button>
-            <button className="verify danger" disabled={!lastReceivedText} onClick={() => void report()}>{zh ? "举报最近收到的消息" : "Report latest received message"}</button>
+            <button className="verify danger" disabled={!lastReceivedText} onClick={() => setPendingSafetyAction({ kind: "report" })}>{zh ? "举报最近收到的消息" : "Report latest received message"}</button>
           </div>
           {actionStatus ? <p role="status">{actionStatus}</p> : null}
         </section>
@@ -1319,7 +1340,13 @@ function SecurityPanel({ lastReceivedText, open, onClose, locale, profile, recip
         <p className="fail-closed">{t("failClosed")}</p>
       </section>
     </aside>
-  );
+    {pendingSafetyAction ? createPortal(<div className="account-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPendingSafetyAction(undefined); }}><section className="account-dialog compact-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="safety-action-title"><IconButton className="account-dialog-close" aria-label={zh ? "关闭" : "Close"} onClick={() => setPendingSafetyAction(undefined)}><X /></IconButton><span className="dialog-symbol danger-symbol">{pendingSafetyAction.kind === "revoke" ? <Trash2 /> : <FileWarning />}</span><h2 id="safety-action-title">{pendingSafetyAction.kind === "revoke" ? (zh ? "撤销这台设备？" : "Revoke this device?") : (zh ? "举报最近收到的消息？" : "Report the latest received message?")}</h2><p>{pendingSafetyAction.kind === "revoke" ? (zh ? "撤销后，该设备将立即失去登录和接收新消息的能力。当前设备不受影响。" : "The device immediately loses sign-in and new-message access. This device is unaffected.") : (zh ? "只有最近收到的这条消息明文会主动提交给管理员审核，其他会话内容不会被附带。" : "Only the latest received message plaintext is disclosed to administrators. No other conversation content is included.")}</p><footer><Button variant="secondary" onClick={() => setPendingSafetyAction(undefined)}>{zh ? "取消" : "Cancel"}</Button><Button variant="danger" icon={pendingSafetyAction.kind === "revoke" ? <Trash2 /> : <FileWarning />} onClick={() => {
+      const action = pendingSafetyAction;
+      setPendingSafetyAction(undefined);
+      if (action.kind === "revoke" && action.deviceId) void revoke(action.deviceId);
+      else void report();
+    }}>{zh ? "确认操作" : "Confirm"}</Button></footer></section></div>, document.body) : null}
+  </>;
 }
 
 function SettingsWorkspace({ locale, motionEnabled, onMotionChange, onSoundChange, onWallpaperChange, soundEnabled, wallpaper }: {
@@ -1359,6 +1386,64 @@ function SettingsWorkspace({ locale, motionEnabled, onMotionChange, onSoundChang
   );
 }
 
+function NewConversationDialog({ locale, onClose, onSelect, session }: {
+  locale: Locale;
+  onClose: () => void;
+  onSelect: (username: string) => void;
+  session: AuthSession;
+}) {
+  const zh = locale === "zh-CN";
+  const [username, setUsername] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const normalized = username.trim().toLowerCase();
+    if (!/^[a-z0-9_]{3,32}$/u.test(normalized)) {
+      setError(zh ? "请输入 3–32 位小写字母、数字或下划线" : "Use 3–32 lowercase letters, numbers, or underscores");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      await lookupDirectory(normalized, session);
+      onSelect(normalized);
+    } catch {
+      setError(zh ? "没有找到这个用户名，请核对后重试" : "Username not found. Check it and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div className="account-dialog-backdrop new-conversation-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="account-dialog new-conversation-dialog" role="dialog" aria-modal="true" aria-labelledby="new-conversation-title">
+        <IconButton className="account-dialog-close" aria-label={zh ? "关闭" : "Close"} onClick={onClose}><X /></IconButton>
+        <span className="dialog-symbol"><MessageCircle /></span>
+        <h2 id="new-conversation-title">{zh ? "新建私密会话" : "New private conversation"}</h2>
+        <p>{zh ? "输入对方注册时设置的用户名。我们会先确认用户存在，再打开端到端加密会话。" : "Enter their registered username. CoveChat verifies the account before opening an encrypted conversation."}</p>
+        <form onSubmit={submit}>
+          <label className={`designed-field ${error ? "has-error" : ""}`}>
+            <span>{zh ? "用户名" : "Username"}</span>
+            <span className="designed-field-control"><span className="field-prefix">@</span><input autoFocus autoComplete="off" spellCheck={false} value={username} onChange={(event) => { setUsername(event.target.value.toLowerCase()); setError(""); }} placeholder="alice_01" /></span>
+            <small>{error || (zh ? "用户名由小写字母、数字和下划线组成" : "Lowercase letters, numbers, and underscores")}</small>
+          </label>
+          <footer><Button type="button" variant="secondary" onClick={onClose}>{zh ? "取消" : "Cancel"}</Button><Button type="submit" loading={loading} disabled={!username.trim()}>{zh ? "查找并开始" : "Find and start"}</Button></footer>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSession }) {
   const [locale, setLocale] = useState<Locale>(detectLocale);
   const t: Translate = (key) => copy[locale][key];
@@ -1367,6 +1452,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   );
   const [noticeOpen, setNoticeOpen] = useState(true);
   const [securityModelOpen, setSecurityModelOpen] = useState(false);
+  const [newConversationOpen, setNewConversationOpen] = useState(false);
   const [updateReady, setUpdateReady] = useState(false);
   const [activeView, setActiveView] = useState<AppView>("messages");
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
@@ -1425,7 +1511,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
         />
         {activeView === "messages" ? (
           <>
-            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onSelect={(username) => {
+            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onNew={() => setNewConversationOpen(true)} onSelect={(username) => {
               playUiSound("navigate");
               withViewTransition(() => { setRecipient(username); setMobilePanelOpen(false); });
             }} profile={profile} recipient={recipient} t={t} />
@@ -1435,7 +1521,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
               profile={profile}
               recipient={recipient}
               session={session}
-              onRecipientChange={setRecipient}
+              onNewConversation={() => setNewConversationOpen(true)}
               onReceivedText={setLastReceivedText}
               onHistoryChange={handleHistoryChange}
               onMenu={() => { playUiSound("open"); setMobilePanelOpen(true); }}
@@ -1464,6 +1550,12 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
         )}
         <MobileBottomNavigation activeView={activeView} onViewChange={(view) => { setActiveView(view); setMobilePanelOpen(false); setDetailsOpen(false); }} t={t} />
       </div>
+      {newConversationOpen ? <NewConversationDialog locale={locale} session={session} onClose={() => setNewConversationOpen(false)} onSelect={(username) => {
+        setRecipient(username);
+        setActiveView("messages");
+        setMobilePanelOpen(false);
+        setNewConversationOpen(false);
+      }} /> : null}
       {noticeOpen ? (
         <aside className="preview-notice">
           <FlaskConical />
