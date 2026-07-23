@@ -78,10 +78,9 @@ export function SecurityGate({ children }: {
       setConfirmation("");
       setState("recovery");
     } catch {
-      setError(t("vaultError"));
+      setError(t("vaultCreateFailed"));
       setPassphrase("");
       setConfirmation("");
-      setState("unlock");
     }
   }
 
@@ -129,15 +128,21 @@ export function SecurityGate({ children }: {
       setRecoverySecret("");
       setState("ready");
     } catch {
-      setError(t("vaultError"));
+      setError(t("vaultRecoveryFailed"));
     }
   }
 
   async function unlock(event: FormEvent) {
     event.preventDefault();
     setError("");
+    let unlocked: SecureProfile;
     try {
-      const unlocked = await unlockSecureProfile(passphrase);
+      unlocked = await unlockSecureProfile(passphrase);
+    } catch {
+      setError(t("vaultUnlockFailed"));
+      return;
+    }
+    try {
       const wasUnregistered = !unlocked.serverRegistered;
       const needsPreKeyPublish = !wasUnregistered && !unlocked.signalPublished;
       const session = wasUnregistered
@@ -157,7 +162,7 @@ export function SecurityGate({ children }: {
       setPassphrase("");
       setState(wasUnregistered ? "recovery" : "ready");
     } catch {
-      setError(t("vaultError"));
+      setError(t("vaultServerAuthFailed"));
     }
   }
 
@@ -216,6 +221,9 @@ export function SecurityGate({ children }: {
               {error ? <p className="gate-error" role="alert">{error}</p> : null}
               <button className="gate-submit">{t("unlock")}</button>
             </form>
+            <button className="gate-secondary" onClick={() => { setError(""); setPassphrase(""); setState("recover"); }}>
+              {t("recoverExistingAccount")}
+            </button>
           </>
         ) : null}
         {state === "recovery" && profile ? (
