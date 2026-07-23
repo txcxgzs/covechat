@@ -43,6 +43,78 @@ export type RecoveryBackup = {
 export type ContactSummary = { username: string; createdAt: number };
 export type ContactRequests = { incoming: ContactSummary[]; outgoing: ContactSummary[] };
 
+/**
+ * Session 自动刷新机制。
+ *
+ * 服务端 session 有效期 1 小时，手机端长时间挂起后 session 过期，
+ * 任何 authenticated 请求都会返回 401。为避免用户被迫重新解锁，
+ * api.ts 维护一个可变 session holder：SecurityGate 在解锁/恢复时
+ * 调用 registerSessionRef 设置当前 profile + session。
+ *
+ * authenticatedFetch 在收到 401 时调用 authenticateProfile 重新认证，
+ * 更新 holder 中的 session 并通知 onSessionRefreshed 回调（让 UI 同步），
+ * 然后重试一次原始请求。
+ */
+type SessionHolder = {
+  profile: SecureProfile;
+  session: AuthSession;
+  onRefresh?: (session: AuthSession) => void;
+};
+
+let sessionHolder: SessionHolder | undefined;
+
+/** SecurityGate 注册当前已认证 profile + session，启用 401 自动重认证。 */
+export function registerSessionRef(
+  profile: SecureProfile,
+  session: AuthSession,
+  onRefresh?: (session: AuthSession) => void,
+): void {
+  sessionHolder = { profile, session, onRefresh };
+}
+
+/** SecurityGate 在退出时清除 holder，避免泄露。 */
+export function unregisterSessionRef(): void {
+  sessionHolder = undefined;
+}
+
+async function refreshSession(): Promise<AuthSession | undefined> {
+  if (!sessionHolder) return undefined;
+  try {
+    const fresh = await authenticateProfile(sessionHolder.profile);
+    sessionHolder.session = fresh;
+    sessionHolder.onRefresh?.(fresh);
+    return fresh;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 带 401 自动重认证的 fetch 包装。
+ * 仅用于需要 Bearer token 的请求；onboarding/recovery 等匿名请求直接用 fetch。
+ * 重试只发生一次，避免无限循环。
+ */
+async function authenticatedFetch(
+  url: string,
+  init: RequestInit,
+  session: AuthSession,
+): Promise<Response> {
+  const response = await fetch(url, init);
+  if (response.status !== 401) return response;
+  // 401：尝试重新认证后重试一次
+  const refreshed = await refreshSession();
+  if (!refreshed) return response;
+  // 用新 token 重建请求
+  const retryInit: RequestInit = {
+    ...init,
+    headers: {
+      ...(init.headers as Record<string, string> | undefined),
+      authorization: `Bearer ${refreshed.accessToken}`,
+    },
+  };
+  return fetch(url, retryInit);
+}
+
 function devicePayload(profile: SecureProfile, prekeyBundle: string): Uint8Array {
   return encoder.encode(JSON.stringify([
     1,
@@ -139,7 +211,7 @@ export async function publishSignalPreKeys(
       updatedAt,
     ])),
   );
-  const response = await fetch(`/api/v1/devices/${profile.deviceId}/prekeys`, {
+  const response = await authenticatedFetch(`/api/v1/devices/${profile.deviceId}/prekeys`, {
     method: "PUT",
     headers: {
       ...authenticatedHeaders(session),
@@ -153,7 +225,7 @@ export async function publishSignalPreKeys(
       signature,
       authorizationSignature,
     }),
-  });
+  }, session);
   if (!response.ok) throw new Error(`pre-key publish failed: ${response.status}`);
   profile.signalPreKeyVersion = prekeyVersion;
   profile.signalPublished = true;
@@ -167,9 +239,9 @@ export async function lookupDirectory(
   username: string,
   session: AuthSession,
 ): Promise<DirectoryResponse> {
-  const response = await fetch(`/api/v1/directory/${encodeURIComponent(username)}`, {
+  const response = await authenticatedFetch(`/api/v1/directory/${encodeURIComponent(username)}`, {
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`directory lookup failed: ${response.status}`);
   return response.json() as Promise<DirectoryResponse>;
 }
@@ -249,9 +321,9 @@ async function deviceSignatureValid(
 }
 
 export async function listOwnDevices(session: AuthSession): Promise<DeviceRecord[]> {
-  const response = await fetch("/api/v1/devices", {
+  const response = await authenticatedFetch("/api/v1/devices", {
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`device list failed: ${response.status}`);
   return response.json() as Promise<DeviceRecord[]>;
 }
@@ -260,17 +332,17 @@ export async function revokeOwnDevice(
   deviceId: string,
   session: AuthSession,
 ): Promise<void> {
-  const response = await fetch(`/api/v1/devices/${deviceId}/revoke`, {
+  const response = await authenticatedFetch(`/api/v1/devices/${deviceId}/revoke`, {
     method: "POST",
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`device revocation failed: ${response.status}`);
 }
 
 export async function listBlockedUsers(session: AuthSession): Promise<string[]> {
-  const response = await fetch("/api/v1/blocks", {
+  const response = await authenticatedFetch("/api/v1/blocks", {
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`block list failed: ${response.status}`);
   return response.json() as Promise<string[]>;
 }
@@ -280,50 +352,50 @@ export async function setUserBlocked(
   blocked: boolean,
   session: AuthSession,
 ): Promise<void> {
-  const response = await fetch(`/api/v1/blocks/${encodeURIComponent(username)}`, {
+  const response = await authenticatedFetch(`/api/v1/blocks/${encodeURIComponent(username)}`, {
     method: blocked ? "POST" : "DELETE",
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`block update failed: ${response.status}`);
 }
 
 export async function deleteOwnAccount(profile: SecureProfile, session: AuthSession): Promise<void> {
   const createdAt = Math.floor(Date.now() / 1000);
   const signature = await signWithAccount(profile, encoder.encode(JSON.stringify([1, "delete-account", profile.username, createdAt])));
-  const response = await fetch("/api/v1/account", { method: "DELETE", headers: { "content-type": "application/json", authorization: `Bearer ${session.accessToken}` }, body: JSON.stringify({ username: profile.username, createdAt, signature }) });
+  const response = await authenticatedFetch("/api/v1/account", { method: "DELETE", headers: { "content-type": "application/json", authorization: `Bearer ${session.accessToken}` }, body: JSON.stringify({ username: profile.username, createdAt, signature }) }, session);
   if (!response.ok) throw new Error(`account deletion failed: ${response.status}`);
 }
 
 export async function listContacts(session: AuthSession): Promise<ContactSummary[]> {
-  const response = await fetch("/api/v1/contacts", { headers: authenticatedHeaders(session) });
+  const response = await authenticatedFetch("/api/v1/contacts", { headers: authenticatedHeaders(session) }, session);
   if (!response.ok) throw new Error(`contacts failed: ${response.status}`);
   return response.json() as Promise<ContactSummary[]>;
 }
 
 export async function listContactRequests(session: AuthSession): Promise<ContactRequests> {
-  const response = await fetch("/api/v1/contact-requests", { headers: authenticatedHeaders(session) });
+  const response = await authenticatedFetch("/api/v1/contact-requests", { headers: authenticatedHeaders(session) }, session);
   if (!response.ok) throw new Error(`contact requests failed: ${response.status}`);
   return response.json() as Promise<ContactRequests>;
 }
 
 export async function sendContactRequest(username: string, session: AuthSession): Promise<{ status: "pending" | "accepted" | "contact" }> {
-  const response = await fetch(`/api/v1/contact-requests/${encodeURIComponent(username)}`, { method: "POST", headers: authenticatedHeaders(session) });
+  const response = await authenticatedFetch(`/api/v1/contact-requests/${encodeURIComponent(username)}`, { method: "POST", headers: authenticatedHeaders(session) }, session);
   if (!response.ok) throw new Error(response.status === 404 ? "user-not-found" : response.status === 403 ? "contact-forbidden" : `contact request failed: ${response.status}`);
   return response.json() as Promise<{ status: "pending" | "accepted" | "contact" }>;
 }
 
 export async function acceptContactRequest(username: string, session: AuthSession): Promise<void> {
-  const response = await fetch(`/api/v1/contact-requests/${encodeURIComponent(username)}/accept`, { method: "POST", headers: authenticatedHeaders(session) });
+  const response = await authenticatedFetch(`/api/v1/contact-requests/${encodeURIComponent(username)}/accept`, { method: "POST", headers: authenticatedHeaders(session) }, session);
   if (!response.ok) throw new Error(`accept request failed: ${response.status}`);
 }
 
 export async function removeContactRequest(username: string, session: AuthSession): Promise<void> {
-  const response = await fetch(`/api/v1/contact-requests/${encodeURIComponent(username)}`, { method: "DELETE", headers: authenticatedHeaders(session) });
+  const response = await authenticatedFetch(`/api/v1/contact-requests/${encodeURIComponent(username)}`, { method: "DELETE", headers: authenticatedHeaders(session) }, session);
   if (!response.ok) throw new Error(`remove request failed: ${response.status}`);
 }
 
 export async function removeContact(username: string, session: AuthSession): Promise<void> {
-  const response = await fetch(`/api/v1/contacts/${encodeURIComponent(username)}`, { method: "DELETE", headers: authenticatedHeaders(session) });
+  const response = await authenticatedFetch(`/api/v1/contacts/${encodeURIComponent(username)}`, { method: "DELETE", headers: authenticatedHeaders(session) }, session);
   if (!response.ok) throw new Error(`remove contact failed: ${response.status}`);
 }
 
@@ -348,7 +420,7 @@ export async function submitAbuseReport(
       createdAt,
     ])),
   );
-  const response = await fetch("/api/v1/reports", {
+  const response = await authenticatedFetch("/api/v1/reports", {
     method: "POST",
     headers: {
       ...authenticatedHeaders(session),
@@ -363,16 +435,16 @@ export async function submitAbuseReport(
       createdAt,
       reporterSignature,
     }),
-  });
+  }, session);
   if (!response.ok) throw new Error(`report submission failed: ${response.status}`);
 }
 
 export async function readMailbox(
   session: AuthSession,
 ): Promise<EncryptedEnvelope[]> {
-  const response = await fetch(`/api/v1/mailboxes/${session.deviceId}`, {
+  const response = await authenticatedFetch(`/api/v1/mailboxes/${session.deviceId}`, {
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`mailbox read failed: ${response.status}`);
   return response.json() as Promise<EncryptedEnvelope[]>;
 }
@@ -396,7 +468,7 @@ export async function sendEnvelope(
       envelope.idempotencyKey,
     ])),
   );
-  const response = await fetch("/api/v1/envelopes", {
+  const response = await authenticatedFetch("/api/v1/envelopes", {
     method: "POST",
     headers: {
       ...authenticatedHeaders(session),
@@ -404,7 +476,7 @@ export async function sendEnvelope(
       "x-idempotency-key": envelope.idempotencyKey,
     },
     body: JSON.stringify({ ...envelope, signature }),
-  });
+  }, session);
   if (!response.ok) throw new Error(`envelope send failed: ${response.status}`);
 }
 
@@ -412,9 +484,10 @@ export async function acknowledgeEnvelope(
   envelopeId: string,
   session: AuthSession,
 ): Promise<void> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     `/api/v1/mailboxes/${session.deviceId}/envelopes/${envelopeId}`,
     { method: "DELETE", headers: authenticatedHeaders(session) },
+    session,
   );
   if (!response.ok && response.status !== 404) {
     throw new Error(`envelope acknowledgement failed: ${response.status}`);
@@ -439,9 +512,9 @@ export function subscribeMailbox(
 export async function loadLatestBackup(
   session: AuthSession,
 ): Promise<EncryptedBackup | undefined> {
-  const response = await fetch("/api/v1/backups/latest", {
+  const response = await authenticatedFetch("/api/v1/backups/latest", {
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (response.status === 404) return undefined;
   if (!response.ok) throw new Error(`backup read failed: ${response.status}`);
   return response.json() as Promise<EncryptedBackup>;
@@ -451,14 +524,14 @@ export async function uploadBackup(
   backup: EncryptedBackup,
   session: AuthSession,
 ): Promise<void> {
-  const response = await fetch("/api/v1/backups", {
+  const response = await authenticatedFetch("/api/v1/backups", {
     method: "PUT",
     headers: {
       ...authenticatedHeaders(session),
       "content-type": "application/json",
     },
     body: JSON.stringify(backup),
-  });
+  }, session);
   if (!response.ok) throw new Error(`backup upload failed: ${response.status}`);
 }
 
@@ -541,14 +614,14 @@ export async function createAttachmentObject(
   input: Pick<EncryptedAttachment, "objectId" | "chunkCount" | "ciphertextSize" | "expiresAt">,
   session: AuthSession,
 ): Promise<void> {
-  const response = await fetch("/api/v1/attachments", {
+  const response = await authenticatedFetch("/api/v1/attachments", {
     method: "POST",
     headers: {
       ...authenticatedHeaders(session),
       "content-type": "application/json",
     },
     body: JSON.stringify({ protocolVersion: 1, ...input }),
-  });
+  }, session);
   if (!response.ok) throw new Error(`attachment create failed: ${response.status}`);
 }
 
@@ -556,9 +629,9 @@ export async function loadAttachmentUploadStatus(
   objectId: string,
   session: AuthSession,
 ): Promise<import("@covechat/protocol").AttachmentUploadStatus> {
-  const response = await fetch(`/api/v1/attachments/${objectId}/upload-status`, {
+  const response = await authenticatedFetch(`/api/v1/attachments/${objectId}/upload-status`, {
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`attachment upload status failed: ${response.status}`);
   return response.json() as Promise<import("@covechat/protocol").AttachmentUploadStatus>;
 }
@@ -570,7 +643,7 @@ export async function uploadAttachmentChunk(
   ciphertextDigest: string,
   session: AuthSession,
 ): Promise<void> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     `/api/v1/attachments/${objectId}/chunks/${chunkIndex}`,
     {
       method: "PUT",
@@ -580,6 +653,7 @@ export async function uploadAttachmentChunk(
       },
       body: JSON.stringify({ ciphertext, ciphertextDigest }),
     },
+    session,
   );
   if (!response.ok) throw new Error(`attachment chunk upload failed: ${response.status}`);
 }
@@ -588,10 +662,10 @@ export async function finalizeAttachment(
   objectId: string,
   session: AuthSession,
 ): Promise<void> {
-  const response = await fetch(`/api/v1/attachments/${objectId}/finalize`, {
+  const response = await authenticatedFetch(`/api/v1/attachments/${objectId}/finalize`, {
     method: "POST",
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`attachment finalize failed: ${response.status}`);
 }
 
@@ -599,9 +673,9 @@ export async function loadAttachmentManifest(
   objectId: string,
   session: AuthSession,
 ): Promise<EncryptedAttachment> {
-  const response = await fetch(`/api/v1/attachments/${objectId}`, {
+  const response = await authenticatedFetch(`/api/v1/attachments/${objectId}`, {
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok) throw new Error(`attachment manifest failed: ${response.status}`);
   return response.json() as Promise<EncryptedAttachment>;
 }
@@ -611,9 +685,10 @@ export async function loadAttachmentChunk(
   chunkIndex: number,
   session: AuthSession,
 ): Promise<{ ciphertext: string; ciphertextDigest: string }> {
-  const response = await fetch(
+  const response = await authenticatedFetch(
     `/api/v1/attachments/${objectId}/chunks/${chunkIndex}`,
     { headers: authenticatedHeaders(session) },
+    session,
   );
   if (!response.ok) throw new Error(`attachment chunk read failed: ${response.status}`);
   return response.json() as Promise<{ ciphertext: string; ciphertextDigest: string }>;
@@ -623,10 +698,10 @@ export async function deleteAttachmentObject(
   reference: AttachmentReference,
   session: AuthSession,
 ): Promise<void> {
-  const response = await fetch(`/api/v1/attachments/${reference.objectId}`, {
+  const response = await authenticatedFetch(`/api/v1/attachments/${reference.objectId}`, {
     method: "DELETE",
     headers: authenticatedHeaders(session),
-  });
+  }, session);
   if (!response.ok && response.status !== 404) {
     throw new Error(`attachment delete failed: ${response.status}`);
   }

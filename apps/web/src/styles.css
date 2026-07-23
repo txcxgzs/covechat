@@ -1046,8 +1046,8 @@ body { overflow: hidden; background: #eef3f6; }
   .message-row { width: 100%; min-width: 0; }
   .bubble { min-width: 0; overflow-wrap: anywhere; }
   .composer { margin-inline: 12px; }
-  .chat .composer, .group-composer { margin-bottom: 82px; }
-  .contacts-workspace, .settings-workspace, .profile-workspace { padding-bottom: 84px; }
+  .chat .composer, .group-composer { margin-bottom: calc(72px + max(8px, env(safe-area-inset-bottom)) + 12px); }
+  .contacts-workspace, .settings-workspace, .profile-workspace { padding-bottom: calc(72px + max(8px, env(safe-area-inset-bottom)) + 12px); }
   .bubble { max-width: 84%; }
   .message-selection-check { position: relative; left: auto; top: auto; flex: 0 0 25px; align-self: center; transform: scale(.82); }
   .message-selection-check.selected { transform: scale(1); }

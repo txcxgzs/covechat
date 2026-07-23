@@ -17,7 +17,9 @@ import {
   publishSignalPreKeys,
   provisionProfile,
   registerRecoveredDevice,
+  registerSessionRef,
   selfHealDeviceSignature,
+  unregisterSessionRef,
   uploadBackup,
   type AuthenticatedProfile,
 } from "./api";
@@ -186,7 +188,11 @@ export function SecurityGate({ children }: {
     }
   }
 
-  if (state === "ready" && authenticated) return children(authenticated);
+  if (state === "ready" && authenticated) {
+    return <SessionRegistrar authenticated={authenticated} onSessionRefresh={setAuthenticated}>
+      {children(authenticated)}
+    </SessionRegistrar>;
+  }
 
   return (
     <main className="gate">
@@ -258,4 +264,24 @@ export function SecurityGate({ children }: {
       </section>
     </main>
   );
+}
+
+/**
+ * 在已认证状态挂载时注册 session holder，
+ * 让 api.ts 的 authenticatedFetch 能在 401 时自动重新认证。
+ * 卸载或 profile 变化时清理，避免旧 session 残留。
+ */
+function SessionRegistrar({ authenticated, onSessionRefresh, children }: {
+  authenticated: AuthenticatedProfile;
+  onSessionRefresh: (next: AuthenticatedProfile) => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    registerSessionRef(authenticated.profile, authenticated.session, (fresh) => {
+      // 401 自动重认证后同步 React state，保证后续 UI 用新 token
+      onSessionRefresh({ profile: authenticated.profile, session: fresh });
+    });
+    return () => unregisterSessionRef();
+  }, [authenticated, onSessionRefresh]);
+  return <>{children}</>;
 }
