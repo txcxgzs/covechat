@@ -17,6 +17,7 @@ import {
   listOwnDevices,
   lookupDirectory,
   revokeOwnDevice,
+  selfHealDeviceSignature,
   setUserBlocked,
   submitAbuseReport,
 } from "./security/api";
@@ -673,9 +674,18 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
       playUiSound("send");
       setAttachmentStatus("");
     } catch (error) {
-      setAttachmentStatus(
-        error instanceof Error ? error.message : t("vaultError"),
-      );
+      const message = error instanceof Error ? error.message : t("vaultError");
+      // 签名损坏错误包含用户名信息，提取并给出中文/英文提示
+      if (message.includes("invalid authorization signature")) {
+        const zh = locale === "zh-CN";
+        setAttachmentStatus(
+          zh
+            ? `对方设备签名损坏，无法发送。请对方升级并解锁一次以自动修复。 (${message})`
+            : `Peer device signature is invalid, cannot send. The peer must upgrade and unlock once to self-heal. (${message})`,
+        );
+      } else {
+        setAttachmentStatus(message);
+      }
     }
   }
   async function reportMessage(message: Message) {
@@ -1501,6 +1511,14 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
     return stored === "plain" || stored === "midnight" ? stored : "cove";
   });
   useEffect(() => installUiRipple(), []);
+  // 运行时自愈：用户可能在旧版前端已经解锁过，SecurityGate 的 unlock 自愈没有执行。
+  // ChatApp mount 时主动检查自己的设备签名，损坏则自动修复。
+  // 这是升级历史脏数据的最后防线——不需要用户重新解锁。
+  useEffect(() => {
+    void selfHealDeviceSignature(profile, session).catch((error) => {
+      console.warn("runtime self-heal failed", error);
+    });
+  }, [profile, session]);
   const handleHistoryChange = useCallback(() => {
     setHistoryRevision((current) => current + 1);
   }, []);
