@@ -268,7 +268,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .preview svg { width: 13px; }
 .preview b { background: var(--teal); color: white; min-width: 18px; height: 18px; border-radius: 9px; display: grid; place-items: center; font-size: 10px; }
 .empty { text-align: center; color: var(--muted); padding: 40px 20px; }
-.chat { position: relative; min-width: 0; display: grid; grid-template-rows: 80px minmax(0, 1fr) auto; view-transition-name: chat-surface; }
+.chat { position: relative; min-width: 0; display: grid; grid-template-rows: 80px minmax(0, 1fr) auto; }
 .chat-header { border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 13px; padding: 0 22px; }
 .disappearing-control { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 5px 18px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .disappearing-control svg { width: 13px; }
@@ -678,8 +678,8 @@ body { overflow: hidden; background: #eef3f6; }
 .send:not(:disabled):hover { transform: translateY(-1px) scale(1.04); box-shadow: 0 8px 18px #159b9a4d; }
 .send:not(:disabled):hover svg { transform: translate(1px, -1px) rotate(-7deg); }
 .send svg { transition: transform 180ms var(--motion-spring); }
-.security-panel { width: 330px; border-left: 0; transform: translateX(28px); opacity: 0; pointer-events: none; box-shadow: -12px 0 34px #102b4614; transition: transform 260ms var(--motion-spring), opacity 180ms ease; z-index: 3; }
-.security-panel.open { transform: translateX(0); opacity: 1; pointer-events: auto; }
+.security-panel { width: 330px; border-left: 0; visibility: hidden; transform: translateX(28px); opacity: 0; pointer-events: none; box-shadow: -12px 0 34px #102b4614; transition: visibility 0s linear 260ms, transform 260ms var(--motion-spring), opacity 180ms ease; z-index: 3; }
+.security-panel.open { visibility: visible; transform: translateX(0); opacity: 1; pointer-events: auto; transition-delay: 0s; }
 .security-person { background: linear-gradient(180deg, #f4fbfb, #fff); }
 .security-section { background: #fff; }
 .preview-notice { position: fixed; right: 18px; top: 84px; width: min(420px, calc(100vw - 36px)); min-height: 58px; border: 1px solid #efd7cf; border-radius: 14px; box-shadow: 0 12px 38px #102b4624; z-index: 8; animation: notice-in 320ms var(--motion-spring) both; }
@@ -980,7 +980,7 @@ body { overflow: hidden; background: #eef3f6; }
 @keyframes check-in { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
 @keyframes notice-in { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
 @keyframes empty-in { from { opacity: 0; transform: translate(-50%, -46%) scale(.96); } to { opacity: 1; transform: translate(-50%, -52%) scale(1); } }
-@keyframes workspace-enter { from { opacity: 0; transform: translateX(8px) scale(.995); } to { opacity: 1; transform: none; } }
+@keyframes workspace-enter { from { opacity: 1; transform: scale(.995); } to { opacity: 1; transform: none; } }
 @keyframes drawer-content-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
 @keyframes menu-pop { from { opacity: 0; transform: translateY(-4px) scale(.88); } to { opacity: 1; transform: none; } }
 @keyframes reply-expand { from { opacity: 0; transform: translateY(8px); max-height: 0; } to { opacity: 1; transform: none; max-height: 58px; } }
@@ -990,10 +990,6 @@ body { overflow: hidden; background: #eef3f6; }
 @keyframes button-spin { to { transform: rotate(1turn); } }
 @keyframes selection-toolbar-in { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: none; } }
 
-::view-transition-old(chat-surface) { animation: chat-view-out 150ms ease both; }
-::view-transition-new(chat-surface) { animation: chat-view-in 260ms var(--motion-spring) both; }
-@keyframes chat-view-out { to { opacity: 0; transform: translateX(-10px) scale(.995); } }
-@keyframes chat-view-in { from { opacity: 0; transform: translateX(16px) scale(.995); } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }

@@ -73,17 +73,6 @@ type AppView = "messages" | "contacts" | "groups" | "settings" | "profile";
 type WallpaperStyle = "cove" | "plain" | "midnight";
 const NOOP_SELECT_MESSAGE = () => undefined;
 
-function withViewTransition(update: () => void) {
-  const transitionDocument = document as Document & {
-    startViewTransition?: (callback: () => void) => { finished: Promise<void> };
-  };
-  if (transitionDocument.startViewTransition && !document.querySelector(".motion-disabled")) {
-    transitionDocument.startViewTransition(update);
-  } else {
-    update();
-  }
-}
-
 function Navigation({ locale, t, onLocaleChange, profileName, activeView, onViewChange, soundEnabled, onSoundToggle }: {
   locale: Locale;
   t: Translate;
@@ -1507,13 +1496,14 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
             setUiSoundsEnabled(next);
           }}
           onLocaleChange={() => { playUiSound("navigate"); setLocale((current) => current === "zh-CN" ? "en" : "zh-CN"); }}
-          onViewChange={(view) => withViewTransition(() => { setActiveView(view); setMobilePanelOpen(false); })}
+          onViewChange={(view) => { setActiveView(view); setMobilePanelOpen(false); }}
         />
         {activeView === "messages" ? (
           <>
             <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onNew={() => setNewConversationOpen(true)} onSelect={(username) => {
               playUiSound("navigate");
-              withViewTransition(() => { setRecipient(username); setMobilePanelOpen(false); });
+              setRecipient(username);
+              setMobilePanelOpen(false);
             }} profile={profile} recipient={recipient} t={t} />
             <Chat
               key={`chat-${locale}`}
