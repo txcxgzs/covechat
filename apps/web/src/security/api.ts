@@ -185,8 +185,12 @@ export async function lookupDirectory(
  * 版本到服务端值并强制触发一次 prekey 轮换。新版 publishSignalPreKeys 会用账户
  * 密钥对新 payload 重签，服务端 update_prekeys 验证通过后即修复历史脏数据。
  *
+ * 修复后会重新查询 directory 二次验证；若服务端仍是旧版（未部署 signature 同步
+ * 代码），update_prekeys 会静默忽略 authorizationSignature 字段，二次验证仍失败，
+ * 此时抛出明确错误提示部署方升级服务端。
+ *
  * @returns true 表示执行了修复（调用方需要 saveSecureProfile）；false 表示无需修复
- * @throws  设备已被 revoke 或不在 directory 中，需要走完整 recovery 流程
+ * @throws  设备已被 revoke / 不在 directory 中 / 服务端未升级，需要走完整 recovery 流程
  */
 export async function selfHealDeviceSignature(
   profile: SecureProfile,
@@ -199,27 +203,49 @@ export async function selfHealDeviceSignature(
   if (!ownDevice) {
     throw new Error("device not found in directory; recovery required");
   }
-  const payload = encoder.encode(JSON.stringify([
-    ownDevice.protocolVersion,
-    ownDevice.deviceId,
-    ownDevice.username,
-    ownDevice.signingPublicKey,
-    ownDevice.prekeyVersion,
-    ownDevice.prekeyBundle,
-    ownDevice.createdAt,
-  ]));
-  const valid = await verifySignature(
-    directory.account.signingPublicKey,
-    payload,
-    ownDevice.authorizationSignature,
-  );
-  if (valid) return false;
+  if (await deviceSignatureValid(directory.account.signingPublicKey, ownDevice)) return false;
   // 签名损坏：先把本地 prekey 版本同步到服务端值，再强制轮换。
   // publishSignalPreKeys 会基于当前 signal state 生成新 bundle 并用账户密钥重签，
   // 服务端接受后 device.authorization_signature 即被刷新为有效值。
   profile.signalPreKeyVersion = ownDevice.prekeyVersion;
   await publishSignalPreKeys(profile, session);
+  // 二次验证：确认服务端真的更新了 authorization_signature。
+  // 旧版服务端 serde 会忽略未知字段 authorizationSignature，返回成功但不更新签名，
+  // 此时需要明确告知部署方升级服务端，而不是让用户反复尝试。
+  const refreshed = await lookupDirectory(profile.username, session);
+  const refreshedDevice = refreshed.devices.find(
+    (device) => device.deviceId === profile.deviceId && !device.revokedAt,
+  );
+  if (!refreshedDevice) {
+    throw new Error("device disappeared after self-heal; recovery required");
+  }
+  if (!(await deviceSignatureValid(refreshed.account.signingPublicKey, refreshedDevice))) {
+    throw new Error(
+      "self-heal failed: server did not persist authorization_signature; "
+        + "deploy the updated API before retrying",
+    );
+  }
   return true;
+}
+
+/**
+ * 验证 directory 中某个设备的 authorization_signature 是否由对应账户密钥签出。
+ * payload 7 元组与 onboarding / update_prekeys 保持一致。
+ */
+async function deviceSignatureValid(
+  accountSigningKey: string,
+  device: DeviceRecord,
+): Promise<boolean> {
+  const payload = encoder.encode(JSON.stringify([
+    device.protocolVersion,
+    device.deviceId,
+    device.username,
+    device.signingPublicKey,
+    device.prekeyVersion,
+    device.prekeyBundle,
+    device.createdAt,
+  ]));
+  return verifySignature(accountSigningKey, payload, device.authorizationSignature);
 }
 
 export async function listOwnDevices(session: AuthSession): Promise<DeviceRecord[]> {

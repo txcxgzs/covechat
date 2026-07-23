@@ -84,7 +84,15 @@ export async function observeAndCheckIdentity(
     ]));
     const valid = await verifySignature(directory.account.signingPublicKey, payload, device.authorizationSignature);
     if (!valid) {
-      throw new Error(`SECURITY: invalid authorization signature for device ${device.deviceId}`);
+      // 明确指出是哪个用户的设备签名损坏，帮助定位是自设备还是对端设备。
+      // 自设备损坏：本机解锁时 selfHealDeviceSignature 会自动修复；
+      // 对端设备损坏：需要对方升级前端 + 服务端后解锁一次触发自愈。
+      throw new Error(
+        `SECURITY: invalid authorization signature for device ${device.deviceId}`
+          + ` (user ${directory.account.username});`
+          + " if this is your device, unlock to self-heal;"
+          + " if this is a peer's device, they must upgrade and unlock to repair",
+      );
     }
   }
   const currentDevices = await directoryFingerprints(directory);

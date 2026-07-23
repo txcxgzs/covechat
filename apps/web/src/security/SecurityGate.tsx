@@ -159,8 +159,16 @@ export function SecurityGate({ children }: {
       if (!wasUnregistered) {
         try {
           selfHealed = await selfHealDeviceSignature(unlocked, session);
-        } catch {
-          // 设备已 revoke 或 directory 查询失败：交由上层错误处理，不阻塞解锁。
+        } catch (error) {
+          // 自愈失败有两种情况：
+          // 1. 设备已 revoke / directory 查询失败：不阻塞解锁，用户进入后可能需 recovery
+          // 2. 服务端未升级（二次验证签名仍损坏）：必须明确提示，否则用户反复尝试无效
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("server did not persist authorization_signature")) {
+            setError(t("vaultServerOutdated"));
+            return;
+          }
+          // 其他错误不阻塞解锁
         }
       }
       const activeProfile = wasUnregistered
