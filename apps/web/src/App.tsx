@@ -1,4 +1,4 @@
-import { FormEvent, type CSSProperties, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   BellOff, Check, CheckCheck, CheckCircle2, ChevronRight, CircleHelp, Copy as CopyIcon, FileText, FileWarning, FlaskConical, Image,
   LockKeyhole, Menu, MessageCircle, Palette, Paperclip, Plus, Search, Send,
@@ -36,6 +36,7 @@ import {
 import {
   addGroupMember,
   createEncryptedGroup,
+  groupMemberUsername,
   isGroupAdmin,
   listEncryptedGroups,
   receiveEncryptedGroupMessages,
@@ -126,6 +127,23 @@ function Navigation({ locale, t, onLocaleChange, profileName, activeView, onView
       </button>
     </nav>
   );
+}
+
+function MobileBottomNavigation({ activeView, onViewChange, t }: {
+  activeView: AppView;
+  onViewChange: (view: AppView) => void;
+  t: Translate;
+}) {
+  const items: Array<{ view: AppView; label: string; icon: ReactNode }> = [
+    { view: "messages", label: t("messages"), icon: <MessageCircle /> },
+    { view: "contacts", label: t("contacts"), icon: <UserRound /> },
+    { view: "groups", label: t("groups"), icon: <UsersRound /> },
+    { view: "settings", label: t("settings"), icon: <Settings /> },
+    { view: "profile", label: t("profile"), icon: <ShieldCheck /> },
+  ];
+  return <nav className="mobile-bottom-navigation" aria-label={t("mobileNavigation")}>
+    {items.map((item) => <button key={item.view} className={activeView === item.view ? "active" : ""} aria-current={activeView === item.view ? "page" : undefined} onClick={() => { playUiSound("navigate"); onViewChange(item.view); }}>{item.icon}<span>{item.label}</span></button>)}
+  </nav>;
 }
 
 function ConversationList({ historyRevision, locale, onSelect, profile, recipient, t }: {
@@ -823,6 +841,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
   const [status, setStatus] = useState("");
   const [messagesByGroup, setMessagesByGroup] = useState<Record<string, Message[]>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [mobileGroupsOpen, setMobileGroupsOpen] = useState(false);
   const [replyTo, setReplyTo] = useState<Message>();
   const [emojiOpen, setEmojiOpen] = useState(false);
   const groupTextInput = useRef<HTMLTextAreaElement>(null);
@@ -898,6 +917,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
       const created = await createEncryptedGroup(profile, session, groupName);
       refreshGroups();
       setSelectedGroupId(created.groupId);
+      setMobileGroupsOpen(false);
       setGroupName("");
       setStatus("");
     } catch (error) {
@@ -1015,11 +1035,11 @@ function GroupWorkspace({ locale, profile, session, t }: {
   }
 
   return (
-    <main className={`group-workspace ${detailsOpen ? "group-details-open" : ""}`}>
+    <main className={`group-workspace ${detailsOpen ? "group-details-open" : ""} ${mobileGroupsOpen ? "mobile-groups-open" : ""}`}>
       <aside className="group-sidebar">
         <header className="group-sidebar-heading">
           <div><h1>{t("groups")}</h1><span>{t("mlsProtocol")}</span></div>
-          <span className="group-count">{availableGroups.length}</span>
+          <span className="group-sidebar-actions"><span className="group-count">{availableGroups.length}</span><IconButton className="group-list-close" aria-label={t("closeGroupList")} onClick={() => setMobileGroupsOpen(false)}><X /></IconButton></span>
         </header>
         <form className="group-create" onSubmit={(event) => void createGroup(event)}>
           <input
@@ -1038,7 +1058,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
             <button
               className={group.groupId === selectedGroupId ? "selected" : ""}
               key={group.groupId}
-              onClick={() => { playUiSound("navigate"); setSelectedGroupId(group.groupId); setDetailsOpen(false); }}
+              onClick={() => { playUiSound("navigate"); setSelectedGroupId(group.groupId); setDetailsOpen(false); setMobileGroupsOpen(false); }}
             >
               <span className="group-list-avatar"><UsersRound /></span>
               <span>
@@ -1050,11 +1070,12 @@ function GroupWorkspace({ locale, profile, session, t }: {
           {availableGroups.length === 0 ? <p className="group-list-empty">{locale === "zh-CN" ? "创建后，群组会显示在这里" : "Your groups will appear here after creation"}</p> : null}
         </div>
       </aside>
+      {mobileGroupsOpen ? <button className="group-mobile-scrim" aria-label={t("closeGroupList")} onClick={() => setMobileGroupsOpen(false)} /> : null}
       <section className="group-chat">
         {selected ? (
           <>
             <header className="chat-header">
-              <button className="mobile-menu icon-button" aria-label={t("groups")}><Menu /></button>
+              <button className="mobile-menu icon-button" aria-label={t("openGroupList")} onClick={() => setMobileGroupsOpen(true)}><Menu /></button>
               <span className="avatar group-chat-avatar"><UsersRound /></span>
               <div className="chat-title">
                 <strong>{selected.name}</strong>
@@ -1113,7 +1134,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
               <li>{locale === "zh-CN" ? "创建并邀请成员" : "Create it and invite members"}</li>
               <li>{locale === "zh-CN" ? "核对成员后开始聊天" : "Verify members and start chatting"}</li>
             </ol>
-            <Button icon={<Plus />} onClick={() => groupNameInput.current?.focus()}>{t("createGroup")}</Button>
+            <Button icon={<Plus />} onClick={() => { setMobileGroupsOpen(true); requestAnimationFrame(() => groupNameInput.current?.focus()); }}>{t("createGroup")}</Button>
           </div>
         )}
       </section>
@@ -1121,7 +1142,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
         <aside className={`group-details ${detailsOpen ? "open" : ""}`} aria-hidden={!detailsOpen}>
           <header className="group-details-header">
             <strong>{t("groupAdmin")}</strong>
-            <button className="icon-button" aria-label={t("groupAdmin")} onClick={() => setDetailsOpen(false)}><X /></button>
+            <button className="icon-button" aria-label={t("closeGroupDetails")} onClick={() => setDetailsOpen(false)}><X /></button>
           </header>
           <section className="group-details-hero">
             <span className="avatar"><UsersRound /></span>
@@ -1144,10 +1165,11 @@ function GroupWorkspace({ locale, profile, session, t }: {
                 {selected.memberDeviceIds.map((memberDeviceId) => {
                   const memberIsAdmin = (selected.adminDeviceIds ?? []).includes(memberDeviceId);
                   const isSelf = memberDeviceId === profile.deviceId;
+                  const username = groupMemberUsername(selected, memberDeviceId) ?? (isSelf ? profile.username : undefined);
                   return (
                     <li key={memberDeviceId} className="member-item">
                       <span className="member-avatar"><UserRound /></span>
-                      <span className="member-copy"><strong>{memberDeviceId.slice(0, 8)}</strong><small>{isSelf ? profile.username : t("groupMembers")}</small></span>
+                      <span className="member-copy"><strong>{username ? `@${username}` : t("unknownGroupMember")}</strong><small>{isSelf ? t("currentGroupMember") : t("encryptedGroupMember")}</small></span>
                       {memberIsAdmin ? <em className="admin-tag">{t("youAreAdmin")}</em> : null}
                       {isAdmin && !isSelf ? <span className="member-actions"><button className="transfer-admin-btn" onClick={() => void transferAdministration(memberDeviceId)}>{t("transferAdmin")}</button><button className="remove-member-btn" onClick={() => void removeMember(memberDeviceId)}><Trash2 /></button></span> : null}
                     </li>
@@ -1440,6 +1462,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
         ) : (
           <ProfileWorkspace locale={locale} profile={profile} session={session} />
         )}
+        <MobileBottomNavigation activeView={activeView} onViewChange={(view) => { setActiveView(view); setMobilePanelOpen(false); setDetailsOpen(false); }} t={t} />
       </div>
       {noticeOpen ? (
         <aside className="preview-notice">

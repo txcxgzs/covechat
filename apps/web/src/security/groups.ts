@@ -127,6 +127,34 @@ function memberDeviceId(identity: string): string {
   return identity.slice(separator + 1);
 }
 
+function memberUsername(identity: string): string {
+  const separator = identity.lastIndexOf("/");
+  if (separator < 1) throw new Error("invalid MLS member identity");
+  return identity.slice(0, separator);
+}
+
+export function groupMemberUsername(metadata: MlsGroupMetadata, deviceId: string): string | undefined {
+  const username = metadata.memberUsernames?.[deviceId]?.trim();
+  return username || undefined;
+}
+
+async function rememberDirectoryVerifiedMember(
+  metadata: MlsGroupMetadata,
+  identity: string,
+  deviceId: string,
+  session: AuthSession,
+): Promise<void> {
+  try {
+    const username = memberUsername(identity);
+    const directory = await lookupDirectory(username, session);
+    if (!directory.devices.some((device) => device.deviceId === deviceId && !device.revokedAt)) return;
+    metadata.memberUsernames ??= {};
+    metadata.memberUsernames[deviceId] = username;
+  } catch {
+    // Identity presentation must never make an otherwise valid MLS message unavailable.
+  }
+}
+
 export function doesMlsSenderMatchEnvelope(identity: string, envelopeDeviceId: string): boolean {
   try {
     return memberDeviceId(identity) === envelopeDeviceId;
@@ -152,12 +180,17 @@ function updateMetadata(
     invitePolicy: "admins",
     policyRevision: 0,
     memberLeafIndices: {},
+    memberUsernames: {},
   };
   metadata.epoch = result.epoch;
   metadata.memberDeviceIds = result.members.map((member) => memberDeviceId(member.identity));
   // 同步 deviceId → leafIndex 映射，removeGroupMember 通过它定位成员。
   metadata.memberLeafIndices = Object.fromEntries(
     result.members.map((member) => [memberDeviceId(member.identity), member.leafIndex]),
+  );
+  const knownUsernames = metadata.memberUsernames ?? {};
+  metadata.memberUsernames = Object.fromEntries(
+    metadata.memberDeviceIds.flatMap((deviceId) => knownUsernames[deviceId] ? [[deviceId, knownUsernames[deviceId]]] : []),
   );
   if (name?.trim()) metadata.name = name.trim();
   if (conversationId) metadata.conversationId = conversationId;
@@ -166,6 +199,7 @@ function updateMetadata(
   metadata.invitePolicy ??= "admins";
   metadata.policyRevision ??= 0;
   metadata.memberLeafIndices ??= {};
+  metadata.memberUsernames ??= {};
   if (!existing) groups(profile).push(metadata);
   return metadata;
 }
@@ -298,6 +332,7 @@ export async function createEncryptedGroup(
   )) as MlsGroupResult;
   profile.mls.state = result.state;
   const metadata = updateMetadata(profile, result, name, conversationId);
+  metadata.memberUsernames = { [profile.deviceId]: profile.username };
   // 创建者默认为管理员，邀请策略默认为 admins（仅管理员可邀请）。
   metadata.adminDeviceIds = [profile.deviceId];
   metadata.invitePolicy = "admins";
@@ -336,7 +371,10 @@ export async function addGroupMember(
       published.mlsKeyPackage,
     )) as MlsCommitResult;
     profile.mls.state = result.state;
-    updateMetadata(profile, result);
+    const updated = updateMetadata(profile, result);
+    updated.memberUsernames ??= {};
+    updated.memberUsernames[profile.deviceId] = profile.username;
+    updated.memberUsernames[device.deviceId] = device.username;
     // Persist the epoch transition before any commit or Welcome leaves the device.
     await saveMlsState(profile);
     void syncEncryptedBackup(profile, session).catch(() => undefined);
@@ -555,6 +593,10 @@ export async function receiveEncryptedGroupMessages(
         if (joined.groupId !== wrapper.groupId) throw new Error("MLS group id mismatch");
         profile.mls.state = joined.state;
         const metadata = updateMetadata(profile, joined, wrapper.name, envelope.conversationId);
+        metadata.memberUsernames ??= {};
+        metadata.memberUsernames[profile.deviceId] = profile.username;
+        const coordinator = joined.members.find((member) => memberDeviceId(member.identity) === envelope.senderDeviceId);
+        if (coordinator) await rememberDirectoryVerifiedMember(metadata, coordinator.identity, envelope.senderDeviceId, session);
         // The Welcome sender bootstraps the coordinator identity. Subsequent
         // membership commits are accepted only from this authenticated device.
         metadata.adminDeviceIds = [envelope.senderDeviceId];
@@ -624,6 +666,9 @@ export async function receiveEncryptedGroupMessages(
       }
       profile.mls.state = processed.state;
       const metadata = updateMetadata(profile, processed);
+      metadata.memberUsernames ??= {};
+      metadata.memberUsernames[profile.deviceId] = profile.username;
+      await rememberDirectoryVerifiedMember(metadata, processed.senderIdentity, envelope.senderDeviceId, session);
       if (processed.kind === "commit" && !metadata.memberDeviceIds.includes(profile.deviceId)) {
         profile.mls.state = JSON.parse(wasm_mls_delete_group(
           JSON.stringify(profile.mls.state),

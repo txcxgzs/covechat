@@ -71,6 +71,8 @@ export type MlsGroupMetadata = {
   policyRevision?: number;
   // deviceId → MLS leafIndex 映射。removeGroupMember 需要 leafIndex 定位成员。
   memberLeafIndices?: Record<string, number>;
+  // 仅保存经服务器目录确认与 deviceId 绑定的用户名，用于安全展示成员身份。
+  memberUsernames?: Record<string, string>;
 };
 
 export type PublishedPreKeyBundle = {

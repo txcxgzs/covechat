@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SecureProfile } from "./vault";
 import {
   doesMlsSenderMatchEnvelope,
+  groupMemberUsername,
   groupLeaveRequestRecipient,
   isAuthorizedGroupCommit,
   isAuthorizedGroupPolicy,
@@ -42,6 +43,16 @@ describe("MLS sender binding", () => {
     expect(doesMlsSenderMatchEnvelope("alice/device-1", "device-1")).toBe(true);
     expect(doesMlsSenderMatchEnvelope("alice/device-1", "device-2")).toBe(false);
     expect(doesMlsSenderMatchEnvelope("invalid", "device-1")).toBe(false);
+  });
+});
+
+describe("group member presentation", () => {
+  it("uses the username derived from authenticated MLS membership", () => {
+    const metadata = profileWithAdmins(["device-admin"]).mls.groups?.[0];
+    if (!metadata) throw new Error("test group missing");
+    metadata.memberUsernames = { "device-admin": "alice" };
+    expect(groupMemberUsername(metadata, "device-admin")).toBe("alice");
+    expect(groupMemberUsername(metadata, "device-member")).toBeUndefined();
   });
 });
 
