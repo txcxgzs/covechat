@@ -12,6 +12,7 @@ import {
   signWithAccount,
   signWithDevice,
   signRecoveryChallenge,
+  verifySignature,
   type PublishedPreKeyBundle,
   type SecureProfile,
 } from "./vault";
@@ -171,6 +172,54 @@ export async function lookupDirectory(
   });
   if (!response.ok) throw new Error(`directory lookup failed: ${response.status}`);
   return response.json() as Promise<DirectoryResponse>;
+}
+
+/**
+ * 自愈检查：验证自己设备在服务端的 authorization_signature 是否仍然有效。
+ *
+ * 升级前的旧版 prekey 轮换没有同步刷新 authorization_signature，导致服务端已有的
+ * 设备记录签名与 prekey_bundle/prekey_version 不一致。任何对端查询 directory 时
+ * observeAndCheckIdentity 都会拒绝该设备，消息无法送达。
+ *
+ * 本函数在解锁后主动查询自己的 directory 并验签；若签名损坏，则同步本地 prekey
+ * 版本到服务端值并强制触发一次 prekey 轮换。新版 publishSignalPreKeys 会用账户
+ * 密钥对新 payload 重签，服务端 update_prekeys 验证通过后即修复历史脏数据。
+ *
+ * @returns true 表示执行了修复（调用方需要 saveSecureProfile）；false 表示无需修复
+ * @throws  设备已被 revoke 或不在 directory 中，需要走完整 recovery 流程
+ */
+export async function selfHealDeviceSignature(
+  profile: SecureProfile,
+  session: AuthSession,
+): Promise<boolean> {
+  const directory = await lookupDirectory(profile.username, session);
+  const ownDevice = directory.devices.find(
+    (device) => device.deviceId === profile.deviceId && !device.revokedAt,
+  );
+  if (!ownDevice) {
+    throw new Error("device not found in directory; recovery required");
+  }
+  const payload = encoder.encode(JSON.stringify([
+    ownDevice.protocolVersion,
+    ownDevice.deviceId,
+    ownDevice.username,
+    ownDevice.signingPublicKey,
+    ownDevice.prekeyVersion,
+    ownDevice.prekeyBundle,
+    ownDevice.createdAt,
+  ]));
+  const valid = await verifySignature(
+    directory.account.signingPublicKey,
+    payload,
+    ownDevice.authorizationSignature,
+  );
+  if (valid) return false;
+  // 签名损坏：先把本地 prekey 版本同步到服务端值，再强制轮换。
+  // publishSignalPreKeys 会基于当前 signal state 生成新 bundle 并用账户密钥重签，
+  // 服务端接受后 device.authorization_signature 即被刷新为有效值。
+  profile.signalPreKeyVersion = ownDevice.prekeyVersion;
+  await publishSignalPreKeys(profile, session);
+  return true;
 }
 
 export async function listOwnDevices(session: AuthSession): Promise<DeviceRecord[]> {

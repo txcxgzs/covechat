@@ -17,6 +17,7 @@ import {
   publishSignalPreKeys,
   provisionProfile,
   registerRecoveredDevice,
+  selfHealDeviceSignature,
   uploadBackup,
   type AuthenticatedProfile,
 } from "./api";
@@ -151,10 +152,21 @@ export function SecurityGate({ children }: {
       if (needsPreKeyPublish) {
         await publishSignalPreKeys(unlocked, session);
       }
+      // 已注册设备：自愈检查 authorization_signature。
+      // 升级前 prekey 轮换未同步签名，服务端历史记录可能已损坏；
+      // 解锁时主动验证并修复，避免对端发消息时 observeAndCheckIdentity 拒绝。
+      let selfHealed = false;
+      if (!wasUnregistered) {
+        try {
+          selfHealed = await selfHealDeviceSignature(unlocked, session);
+        } catch {
+          // 设备已 revoke 或 directory 查询失败：交由上层错误处理，不阻塞解锁。
+        }
+      }
       const activeProfile = wasUnregistered
         ? { ...unlocked, serverRegistered: true, signalPublished: true }
         : unlocked;
-      if (wasUnregistered || needsPreKeyPublish) {
+      if (wasUnregistered || needsPreKeyPublish || selfHealed) {
         await saveSecureProfile(activeProfile, passphrase);
       }
       setProfile(activeProfile);
