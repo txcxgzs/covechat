@@ -1,8 +1,8 @@
 import { FormEvent, type CSSProperties, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  BellOff, Check, CheckCheck, CheckCircle2, ChevronRight, CircleHelp, Copy as CopyIcon, FileText, FileWarning, FlaskConical, Image,
-  LockKeyhole, Menu, MessageCircle, Palette, Paperclip, Plus, Search, Send,
+  BellOff, Check, CheckCheck, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Copy as CopyIcon, FileText, FileWarning, FlaskConical, Image,
+  LockKeyhole, Menu, MessageCircle, Palette, PanelLeft, PanelLeftClose, Paperclip, Plus, Search, Send,
   Languages, Reply, Settings, ShieldCheck, Smile, Sparkles, Trash2, UserRound, UsersRound, Volume2, VolumeX, X
 } from "lucide-react";
 import type { Conversation, Message } from "./data";
@@ -26,6 +26,7 @@ import {
   listConversationHistories,
   loadConversationHistory,
   markConversationRead,
+  markMessageDelivered,
   removeConversationHistoryItems,
 } from "./security/history";
 import { syncEncryptedBackup } from "./security/backup";
@@ -49,6 +50,7 @@ import {
 } from "./security/groups";
 import {
   receiveEncryptedTexts,
+  sendDeliveryReceipt,
   sendEncryptedAttachment,
   sendEncryptedText,
   subscribeEncryptedMailbox,
@@ -73,10 +75,12 @@ type AppView = "messages" | "contacts" | "groups" | "settings" | "profile";
 type WallpaperStyle = "cove" | "plain" | "midnight";
 const NOOP_SELECT_MESSAGE = () => undefined;
 
-function Navigation({ locale, t, onLocaleChange, profileName, activeView, onViewChange, soundEnabled, onSoundToggle }: {
+function Navigation({ collapsed, locale, t, onLocaleChange, onToggleCollapse, profileName, activeView, onViewChange, soundEnabled, onSoundToggle }: {
+  collapsed: boolean;
   locale: Locale;
   t: Translate;
   onLocaleChange: () => void;
+  onToggleCollapse: () => void;
   profileName?: string;
   activeView: AppView;
   onViewChange: (view: AppView) => void;
@@ -115,6 +119,10 @@ function Navigation({ locale, t, onLocaleChange, profileName, activeView, onView
         <span>{profileName ?? t("alexKim")}</span>
         <span className="presence" />
       </button>
+      <button className="nav-item nav-collapse-toggle" onClick={onToggleCollapse} aria-label={collapsed ? (locale === "zh-CN" ? "展开侧栏" : "Expand sidebar") : (locale === "zh-CN" ? "收起侧栏" : "Collapse sidebar")} title={collapsed ? (locale === "zh-CN" ? "展开侧栏" : "Expand sidebar") : (locale === "zh-CN" ? "收起侧栏" : "Collapse sidebar")}>
+        {collapsed ? <PanelLeft aria-hidden="true" /> : <PanelLeftClose aria-hidden="true" />}
+        <span>{collapsed ? (locale === "zh-CN" ? "展开" : "Expand") : (locale === "zh-CN" ? "收起" : "Collapse")}</span>
+      </button>
     </nav>
   );
 }
@@ -136,9 +144,11 @@ function MobileBottomNavigation({ activeView, onViewChange, t }: {
   </nav>;
 }
 
-function ConversationList({ historyRevision, locale, onNew, onSelect, profile, recipient, t }: {
+function ConversationList({ historyRevision, locale, navCollapsed, onExpandNav, onNew, onSelect, profile, recipient, t }: {
   historyRevision: number;
   locale: Locale;
+  navCollapsed: boolean;
+  onExpandNav: () => void;
   onNew: () => void;
   onSelect: (username: string) => void;
   profile: SecureProfile;
@@ -167,6 +177,7 @@ function ConversationList({ historyRevision, locale, onNew, onSelect, profile, r
   return (
     <aside className="conversations">
       <div className="section-heading">
+        {navCollapsed ? <IconButton className="nav-expand-trigger" aria-label={locale === "zh-CN" ? "展开侧栏" : "Expand sidebar"} onClick={onExpandNav}><Menu /></IconButton> : null}
         <h1>{t("messages")}</h1>
         <IconButton className="new-conversation-trigger" aria-label={t("newConversation")} onClick={onNew}><Plus /></IconButton>
       </div>
@@ -394,7 +405,7 @@ function InteractiveMessage({ activeSearchMatch = false, locale, message, onRepl
       <div className="bubble">
         {message.replyTo ? <blockquote data-reply-id={message.replyTo.messageId}>{message.replyTo.excerpt}</blockquote> : null}
         <p>{message.text}</p>
-        <footer><time>{message.time}</time>{message.delivered ? <CheckCheck aria-label={isChinese ? "已送达" : "Delivered"} /> : <LockKeyhole aria-label={isChinese ? "已加密" : "Encrypted"} />}</footer>
+        <footer><time>{message.time}</time>{message.delivered ? <Check aria-label={isChinese ? "已发送" : "Sent"} /> : <LockKeyhole aria-label={isChinese ? "已加密" : "Encrypted"} />}</footer>
       </div>
       <span className="swipe-reply-indicator" aria-hidden="true"><Reply /></span>
       {menu ? (
@@ -427,6 +438,8 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
   const [attachments, setAttachments] = useState<AttachmentReference[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState("");
   const [disappearAfter, setDisappearAfter] = useState(0);
+  const [disappearDropdownOpen, setDisappearDropdownOpen] = useState(false);
+  const disappearRef = useRef<HTMLDivElement>(null);
   // 附件上传进度（null=无上传进行中）。上传完成或失败后清空。
   const [uploadProgress, setUploadProgress] = useState<{
     uploadedChunks: number;
@@ -495,7 +508,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
           hour: "2-digit",
           minute: "2-digit",
         }).format(new Date(item.createdAt)),
-        delivered: true,
+        delivered: item.delivered ?? false,
         expiresAt: item.expiresAt,
         replyTo: item.reply,
       })));
@@ -547,7 +560,20 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
     async function refresh() {
       const received = await receiveEncryptedTexts(profile, session);
       if (!active || received.length === 0) return;
+      const newlyDeliveredIds = new Set<string>();
       for (const message of received) {
+        if (message.receiptMessageId) {
+          const updated = await markMessageDelivered(profile, message.senderUsername, message.receiptMessageId);
+          if (updated && message.senderUsername === recipient) {
+            newlyDeliveredIds.add(message.receiptMessageId);
+          }
+          continue;
+        }
+
+        if (message.messageId) {
+          sendDeliveryReceipt(profile, session, message.senderUsername, message.messageId).catch(() => undefined);
+        }
+
         await appendConversationHistory(profile, message.senderUsername, {
           id: message.envelopeId,
           from: "them",
@@ -556,9 +582,15 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
           createdAt: message.createdAt,
           expiresAt: message.expiresAt,
           reply: message.reply,
+          delivered: true, // we received it
         });
       }
-      const visible = received.filter((message) => message.senderUsername === recipient);
+
+      if (newlyDeliveredIds.size > 0) {
+        setMessages((current) => current.map((m) => newlyDeliveredIds.has(m.id) ? { ...m, delivered: true } : m));
+      }
+
+      const visible = received.filter((message) => !message.receiptMessageId && message.senderUsername === recipient);
       const latestVisible = visible.at(-1)?.createdAt;
       if (latestVisible) await markConversationRead(profile, recipient, latestVisible);
       onHistoryChange();
@@ -610,10 +642,11 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
       return;
     }
     try {
-      await sendEncryptedText(profile, session, recipient, text, disappearAfter || undefined, reply);
       const id = crypto.randomUUID();
       const createdAt = Date.now();
       const expiresAt = disappearAfter ? createdAt + disappearAfter * 1000 : undefined;
+      await sendEncryptedText(profile, session, recipient, id, text, disappearAfter || undefined, reply);
+      
       await appendConversationHistory(profile, recipient, {
         id,
         from: "me",
@@ -621,6 +654,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
         createdAt,
         expiresAt,
         reply,
+        delivered: false,
       });
       onHistoryChange();
       void syncEncryptedBackup(profile, session).catch(() => undefined);
@@ -632,7 +666,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
           hour: "2-digit",
           minute: "2-digit",
         }).format(new Date(createdAt)),
-        delivered: true,
+        delivered: false,
         expiresAt,
         replyTo: reply,
       }]);
@@ -670,17 +704,19 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
     setAttachmentStatus(t("attachmentUploading"));
     setUploadProgress({ uploadedChunks: 0, chunkCount: Math.ceil(file.size / (1024 * 1024)), uploadedBytes: 0, totalBytes: file.size });
     try {
+      const id = crypto.randomUUID();
       const attachmentExpiry = Math.floor(Date.now() / 1000) + (disappearAfter || 30 * 24 * 60 * 60);
       const reference = await encryptAndUploadAttachment(file, profile, session, attachmentExpiry, (progress) => {
         setUploadProgress(progress);
       });
-      await sendEncryptedAttachment(profile, session, recipient, reference, disappearAfter || undefined);
+      await sendEncryptedAttachment(profile, session, recipient, id, reference, disappearAfter || undefined);
       await appendConversationHistory(profile, recipient, {
-        id: crypto.randomUUID(),
+        id,
         from: "me",
         attachment: reference,
         createdAt: Date.now(),
         expiresAt: disappearAfter ? Date.now() + disappearAfter * 1000 : undefined,
+        delivered: false,
       });
       onHistoryChange();
       void syncEncryptedBackup(profile, session).catch(() => undefined);
@@ -737,15 +773,24 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
       ) : null}
       {recipient ? <div className="disappearing-control">
         <LockKeyhole />
-        <label>
-          {locale === "zh-CN" ? "定时消失" : "Disappearing messages"}
-          <select value={disappearAfter} onChange={(event) => setDisappearAfter(Number(event.target.value))}>
-            <option value={0}>{locale === "zh-CN" ? "关闭" : "Off"}</option>
-            <option value={3600}>{locale === "zh-CN" ? "1 小时" : "1 hour"}</option>
-            <option value={86400}>{locale === "zh-CN" ? "1 天" : "1 day"}</option>
-            <option value={604800}>{locale === "zh-CN" ? "7 天" : "7 days"}</option>
-          </select>
-        </label>
+        <span className="disappearing-label">{locale === "zh-CN" ? "定时消失" : "Disappearing messages"}</span>
+        <div className="disappear-dropdown" ref={disappearRef}>
+          <button className="disappear-trigger" onClick={() => setDisappearDropdownOpen((prev) => !prev)} aria-expanded={disappearDropdownOpen} aria-haspopup="listbox">
+            <span>{disappearAfter === 0 ? (locale === "zh-CN" ? "关闭" : "Off") : disappearAfter === 3600 ? (locale === "zh-CN" ? "1 小时" : "1 hour") : disappearAfter === 86400 ? (locale === "zh-CN" ? "1 天" : "1 day") : (locale === "zh-CN" ? "7 天" : "7 days")}</span>
+            <ChevronDown aria-hidden="true" />
+          </button>
+          {disappearDropdownOpen ? <>
+            <div className="disappear-dropdown-backdrop" onClick={() => setDisappearDropdownOpen(false)} />
+            <div className="disappear-dropdown-menu" role="listbox">
+              {([{ value: 0, label: locale === "zh-CN" ? "关闭" : "Off" }, { value: 3600, label: locale === "zh-CN" ? "1 小时" : "1 hour" }, { value: 86400, label: locale === "zh-CN" ? "1 天" : "1 day" }, { value: 604800, label: locale === "zh-CN" ? "7 天" : "7 days" }] as const).map((opt) => (
+                <button key={opt.value} className={disappearAfter === opt.value ? "active" : ""} role="option" aria-selected={disappearAfter === opt.value} onClick={() => { playUiSound("navigate"); setDisappearAfter(opt.value); setDisappearDropdownOpen(false); }}>
+                  {opt.label}
+                  {disappearAfter === opt.value ? <Check aria-hidden="true" /> : null}
+                </button>
+              ))}
+            </div>
+          </> : null}
+        </div>
       </div> : null}
       <section className="messages" aria-label="Encrypted conversation" aria-live="polite">
         {recipient ? <div className="date-rule"><span>{t("today")}</span></div> : (
@@ -961,7 +1006,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
                 hour: "2-digit",
                 minute: "2-digit",
               }).format(new Date()),
-              delivered: true,
+              delivered: false,
               replyTo: reply,
             }
           ]
@@ -1450,6 +1495,7 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   const [historyRevision, setHistoryRevision] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(uiSoundsEnabled);
   const [motionEnabled, setMotionEnabled] = useState(() => localStorage.getItem("covechat-motion") !== "off");
+  const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem("covechat-nav-collapsed") === "true");
   const [wallpaper, setWallpaper] = useState<WallpaperStyle>(() => {
     const stored = localStorage.getItem("covechat-wallpaper");
     return stored === "plain" || stored === "midnight" ? stored : "cove";
@@ -1483,8 +1529,9 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
   }, [securityModelOpen]);
   return (
     <div className={`app wallpaper-${wallpaper} ${motionEnabled ? "" : "motion-disabled"}`}>
-      <div className={`${detailsOpen ? "workspace security-open" : "workspace"} ${mobilePanelOpen ? "mobile-panel-open" : ""}`}>
+      <div className={`${detailsOpen ? "workspace security-open" : "workspace"} ${mobilePanelOpen ? "mobile-panel-open" : ""} ${navCollapsed ? "nav-collapsed" : ""}`}>
         <Navigation
+          collapsed={navCollapsed}
           activeView={activeView}
           locale={locale}
           t={t}
@@ -1497,10 +1544,11 @@ function ChatApp({ profile, session }: { profile: SecureProfile; session: AuthSe
           }}
           onLocaleChange={() => { playUiSound("navigate"); setLocale((current) => current === "zh-CN" ? "en" : "zh-CN"); }}
           onViewChange={(view) => { setActiveView(view); setMobilePanelOpen(false); }}
+          onToggleCollapse={() => { playUiSound("navigate"); setNavCollapsed((prev) => { const next = !prev; localStorage.setItem("covechat-nav-collapsed", String(next)); return next; }); }}
         />
         {activeView === "messages" ? (
           <>
-            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} onNew={() => setNewConversationOpen(true)} onSelect={(username) => {
+            <ConversationList historyRevision={historyRevision} key={`conversations-${locale}`} locale={locale} navCollapsed={navCollapsed} onExpandNav={() => { playUiSound("navigate"); setNavCollapsed(false); localStorage.setItem("covechat-nav-collapsed", "false"); }} onNew={() => setNewConversationOpen(true)} onSelect={(username) => {
               playUiSound("navigate");
               setRecipient(username);
               setMobilePanelOpen(false);

@@ -163,6 +163,7 @@ export type LocalHistoryItem = {
   createdAt: number;
   expiresAt?: number;
   reply?: import("./message-content").ReplyReference;
+  delivered?: boolean;
 };
 
 let cryptoReady: Promise<unknown> | undefined;

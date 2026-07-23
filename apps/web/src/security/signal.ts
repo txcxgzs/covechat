@@ -47,6 +47,8 @@ export type DecryptedTextMessage = {
   envelopeId: string;
   senderDeviceId: string;
   senderUsername: string;
+  messageId?: string;
+  receiptMessageId?: string;
   body?: string;
   attachment?: AttachmentReference;
   createdAt: number;
@@ -97,8 +99,9 @@ function parseBundle(directory: DirectoryResponse["devices"][number]): SignalPre
 }
 
 type SignalPayload =
-  | { version: 1; type: "text"; senderUsername: string; body: string; reply?: ReplyReference; createdAt: number; expiresAt?: number }
-  | { version: 1; type: "attachment"; senderUsername: string; attachment: AttachmentReference; createdAt: number; expiresAt?: number };
+  | { version: 1; type: "text"; senderUsername: string; messageId: string; body: string; reply?: ReplyReference; createdAt: number; expiresAt?: number }
+  | { version: 1; type: "attachment"; senderUsername: string; messageId: string; attachment: AttachmentReference; createdAt: number; expiresAt?: number }
+  | { version: 1; type: "receipt"; senderUsername: string; messageId: string; createdAt: number; expiresAt?: number };
 
 async function sendEncryptedPayload(
   profile: SecureProfile,
@@ -176,6 +179,7 @@ export async function sendEncryptedText(
   profile: SecureProfile,
   session: AuthSession,
   recipientUsername: string,
+  messageId: string,
   body: string,
   disappearAfterSeconds?: number,
   reply?: ReplyReference,
@@ -186,6 +190,7 @@ export async function sendEncryptedText(
     version: 1,
     type: "text",
     senderUsername: profile.username,
+    messageId,
     body: normalizedBody,
     reply,
     createdAt: Date.now(),
@@ -197,6 +202,7 @@ export async function sendEncryptedAttachment(
   profile: SecureProfile,
   session: AuthSession,
   recipientUsername: string,
+  messageId: string,
   attachment: AttachmentReference,
   disappearAfterSeconds?: number,
 ): Promise<void> {
@@ -213,9 +219,25 @@ export async function sendEncryptedAttachment(
     version: 1,
     type: "attachment",
     senderUsername: profile.username,
+    messageId,
     attachment,
     createdAt: Date.now(),
     expiresAt: disappearAfterSeconds ? Date.now() + disappearAfterSeconds * 1000 : undefined,
+  });
+}
+
+export async function sendDeliveryReceipt(
+  profile: SecureProfile,
+  session: AuthSession,
+  recipientUsername: string,
+  messageId: string,
+): Promise<void> {
+  return sendEncryptedPayload(profile, session, recipientUsername, {
+    version: 1,
+    type: "receipt",
+    senderUsername: profile.username,
+    messageId,
+    createdAt: Date.now(),
   });
 }
 
@@ -263,12 +285,14 @@ export async function receiveEncryptedTexts(
         || !/^[a-z0-9_]{3,32}$/u.test(payload.senderUsername)
         || (
           payload.type === "text"
-            ? typeof payload.body !== "string" || (payload.reply !== undefined && !isReplyReference(payload.reply))
+            ? typeof payload.messageId !== "string" || typeof payload.body !== "string" || (payload.reply !== undefined && !isReplyReference(payload.reply))
             : payload.type === "attachment"
-              ? payload.attachment?.protocolVersion !== 1
+              ? typeof payload.messageId !== "string" || payload.attachment?.protocolVersion !== 1
                 || !payload.attachment.objectId
                 || !payload.attachment.fileKey
-              : true
+              : payload.type === "receipt"
+                ? typeof payload.messageId !== "string"
+                : true
         )
       ) {
         throw new Error("invalid encrypted message payload");
@@ -286,16 +310,18 @@ export async function receiveEncryptedTexts(
       }
       void syncEncryptedBackup(profile, session).catch(() => undefined);
       await acknowledgeEnvelope(envelope.envelopeId, session);
-      if (payload.expiresAt && payload.expiresAt <= Date.now()) continue;
+      if (payload.type !== "receipt" && payload.expiresAt && payload.expiresAt <= Date.now()) continue;
       messages.push({
         envelopeId: envelope.envelopeId,
         senderDeviceId: envelope.senderDeviceId,
         senderUsername: payload.senderUsername,
+        messageId: payload.type !== "receipt" ? payload.messageId : undefined,
+        receiptMessageId: payload.type === "receipt" ? payload.messageId : undefined,
         body: payload.type === "text" ? payload.body : undefined,
         reply: payload.type === "text" ? payload.reply : undefined,
         attachment: payload.type === "attachment" ? payload.attachment : undefined,
-        createdAt: payload.createdAt,
-        expiresAt: payload.expiresAt,
+        createdAt: payload.type !== "receipt" ? payload.createdAt : 0,
+        expiresAt: payload.type !== "receipt" ? payload.expiresAt : undefined,
       });
     } catch {
       // Fail closed: keep the envelope queued for a future compatible client.

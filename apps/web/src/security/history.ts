@@ -103,3 +103,22 @@ export async function markConversationRead(
   state.conversationReadAt[key] = readAt;
   await saveTrustState(profile, state);
 }
+
+export async function markMessageDelivered(
+  profile: SecureProfile,
+  username: string,
+  messageId: string,
+): Promise<boolean> {
+  const state = await loadTrustState(profile);
+  const key = normalizedUsername(username);
+  const history = state.history?.[key];
+  if (!history) return false;
+
+  const target = history.find((item) => item.id === messageId);
+  if (!target || target.delivered) return false;
+
+  target.delivered = true;
+  await saveTrustState(profile, state);
+  return true;
+}
+
