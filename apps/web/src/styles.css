@@ -295,8 +295,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 
 .chat-title { display: grid; gap: 3px; }
 .chat-title strong { font-size: 16px; }
-.chat-title span, .security-person span { color: var(--teal); font-size: 12px; display: flex; align-items: center; gap: 5px; }
+.chat-title span, .security-person span:not(.avatar) { color: var(--teal); font-size: 12px; display: flex; align-items: center; gap: 5px; }
 .chat-title svg, .security-person svg { width: 12px; }
+.security-person svg { width: 12px; height: 12px; }
 .header-actions { display: flex; margin-left: auto; gap: 4px; }
 .mobile-menu { display: none; }
 .mobile-bottom-navigation { display: none; }
@@ -823,7 +824,7 @@ body { overflow: hidden; background: #eef3f6; }
 .conversation-line time { font-size: var(--font-12); line-height: var(--line-12); }
 .preview { font-size: var(--font-13); line-height: var(--line-13); }
 .chat-title strong, .chat-title input { font-size: var(--font-16); line-height: var(--line-16); }
-.chat-title span, .security-person span { font-size: var(--font-13); line-height: var(--line-13); }
+.chat-title span, .security-person span:not(.avatar) { font-size: var(--font-13); line-height: var(--line-13); }
 .bubble p { font-size: var(--font-15); line-height: var(--line-20); }
 .bubble footer { font-size: var(--font-12); line-height: var(--line-12); }
 .composer textarea { font-size: var(--font-15); line-height: var(--line-15); }
