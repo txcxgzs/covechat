@@ -321,13 +321,22 @@ export async function loadTrustState(profile: SecureProfile): Promise<TrustState
     (store) => store.get(TRUST_STATE_KEY),
   );
   if (!record || record.version !== 1) return { version: 1, identities: {} };
-  const plaintext = wasm_decrypt_trust_state(
-    profile.deviceKeys.privateKey,
-    record.encryptedState,
-  );
-  const state = JSON.parse(decoder.decode(fromBase64Url(plaintext))) as TrustState;
-  if (state.version !== 1 || !state.identities) throw new Error("invalid trust state");
-  return state;
+  try {
+    const plaintext = wasm_decrypt_trust_state(
+      profile.deviceKeys.privateKey,
+      record.encryptedState,
+    );
+    const state = JSON.parse(decoder.decode(fromBase64Url(plaintext))) as TrustState;
+    if (state.version !== 1 || !state.identities) throw new Error("invalid trust state");
+    return state;
+  } catch (error) {
+    // trust-state 记录损坏（解密失败 / JSON 解析失败 / 结构不合法）时降级为空 state，
+    // 并删除损坏记录避免后续反复失败。代价是丢失已验证的安全码与本地消息历史，
+    // 用户需重新做 identity verification，但主 vault 与设备身份不受影响。
+    console.warn("trust state corrupted, falling back to empty state", error);
+    await transaction<undefined>("readwrite", (store) => store.delete(TRUST_STATE_KEY));
+    return { version: 1, identities: {} };
+  }
 }
 
 export async function saveTrustState(
@@ -348,34 +357,52 @@ export async function saveTrustState(
   } satisfies StoredTrustState));
 }
 
-async function restoreSignalState(profile: SecureProfile): Promise<void> {
+async function restoreSignalState(profile: SecureProfile): Promise<boolean> {
   const record = await transaction<StoredSignalState | undefined>(
     "readonly",
     (store) => store.get(SIGNAL_STATE_KEY),
   );
-  if (!record || record.version !== 1) return;
-  const plaintext = wasm_decrypt_signal_state(
-    profile.deviceKeys.privateKey,
-    record.encryptedState,
-  );
-  profile.signal.state = JSON.parse(
-    decoder.decode(fromBase64Url(plaintext)),
-  ) as Record<string, unknown>;
+  if (!record || record.version !== 1) return false;
+  try {
+    const plaintext = wasm_decrypt_signal_state(
+      profile.deviceKeys.privateKey,
+      record.encryptedState,
+    );
+    profile.signal.state = JSON.parse(
+      decoder.decode(fromBase64Url(plaintext)),
+    ) as Record<string, unknown>;
+    return true;
+  } catch (error) {
+    // signal-state 损坏时删除脏数据，由 caller 重建 Signal 会话状态。
+    // 代价：与对端已建立的 Signal 会话丢失，对端下次发消息会用新 prekey 重新建立会话。
+    console.warn("signal state corrupted, will rebuild", error);
+    await transaction<undefined>("readwrite", (store) => store.delete(SIGNAL_STATE_KEY));
+    return false;
+  }
 }
 
-async function restoreMlsState(profile: SecureProfile): Promise<void> {
+async function restoreMlsState(profile: SecureProfile): Promise<boolean> {
   const record = await transaction<StoredMlsState | undefined>(
     "readonly",
     (store) => store.get(MLS_STATE_KEY),
   );
-  if (!record || record.version !== 1) return;
-  const plaintext = wasm_decrypt_mls_state(
-    profile.deviceKeys.privateKey,
-    record.encryptedState,
-  );
-  profile.mls = JSON.parse(
-    decoder.decode(fromBase64Url(plaintext)),
-  ) as MlsDeviceBootstrap;
+  if (!record || record.version !== 1) return false;
+  try {
+    const plaintext = wasm_decrypt_mls_state(
+      profile.deviceKeys.privateKey,
+      record.encryptedState,
+    );
+    profile.mls = JSON.parse(
+      decoder.decode(fromBase64Url(plaintext)),
+    ) as MlsDeviceBootstrap;
+    return true;
+  } catch (error) {
+    // mls-state 损坏时删除脏数据，由 caller 重建 MLS 设备状态。
+    // 代价：本地群组成员资格丢失，需要群管理员重新邀请本设备加入群组。
+    console.warn("mls state corrupted, will rebuild", error);
+    await transaction<undefined>("readwrite", (store) => store.delete(MLS_STATE_KEY));
+    return false;
+  }
 }
 
 export async function unlockSecureProfile(passphrase: string): Promise<SecureProfile> {
@@ -402,7 +429,16 @@ export async function unlockSecureProfile(passphrase: string): Promise<SecurePro
     profile.signalPreKeyVersion = 1;
   } else {
     if (!profile.signalPreKeyVersion) profile.signalPreKeyVersion = 1;
-    await restoreSignalState(profile);
+    // 子 state 损坏时降级重建：保留主 vault 与设备身份，仅重置对应的协议状态。
+    // signal 重建后 signalPublished 置为 false，SecurityGate 会自动重新 publish prekey。
+    const signalRestored = await restoreSignalState(profile);
+    if (!signalRestored) {
+      profile.signal = JSON.parse(
+        wasm_signal_create_device(profile.deviceId, 1),
+      ) as SignalDeviceBootstrap;
+      profile.signalPublished = false;
+      profile.signalPreKeyVersion = 1;
+    }
   }
   if (!profile.mls) {
     profile.mls = JSON.parse(
@@ -410,7 +446,13 @@ export async function unlockSecureProfile(passphrase: string): Promise<SecurePro
     ) as MlsDeviceBootstrap;
     profile.signalPublished = false;
   } else {
-    await restoreMlsState(profile);
+    const mlsRestored = await restoreMlsState(profile);
+    if (!mlsRestored) {
+      // mls-state 损坏：重建本地 MLS 设备状态。群组成员资格需要管理员重新邀请。
+      profile.mls = JSON.parse(
+        wasm_mls_create_device(`${profile.username}/${profile.deviceId}`),
+      ) as MlsDeviceBootstrap;
+    }
   }
   return profile;
 }

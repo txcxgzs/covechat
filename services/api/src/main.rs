@@ -202,6 +202,10 @@ struct PreKeyUpdate {
     prekey_bundle: String,
     updated_at: u64,
     signature: String,
+    /// 由账户签名密钥对新的设备记录 payload 重新签名，
+    /// 用于同步更新 `DeviceRecord.authorization_signature`，
+    /// 避免 prekey 轮换后对端 directory 校验失败。
+    authorization_signature: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1427,10 +1431,21 @@ async fn update_prekeys(
     if authenticated_device(&headers, &mut store) != Some(device_id) {
         return StatusCode::UNAUTHORIZED;
     }
-    let Some(device) = store.devices.get_mut(&device_id) else {
-        return StatusCode::NOT_FOUND;
-    };
-    if device.revoked_at.is_some() || input.prekey_version != device.prekey_version + 1 {
+    // 先以不可变方式取出构造 payload 所需的字段，避免后续同时持有
+    // `store.devices` 的可变借用与 `store.accounts` 的不可变借用。
+    let (protocol_version, username, device_signing_key, created_at, current_prekey_version, revoked_at) =
+        match store.devices.get(&device_id) {
+            Some(device) => (
+                device.protocol_version,
+                device.username.clone(),
+                device.signing_public_key.clone(),
+                device.created_at,
+                device.prekey_version,
+                device.revoked_at,
+            ),
+            None => return StatusCode::NOT_FOUND,
+        };
+    if revoked_at.is_some() || input.prekey_version != current_prekey_version + 1 {
         return StatusCode::CONFLICT;
     }
     let Ok(payload) = serde_json::to_vec(&(
@@ -1442,12 +1457,41 @@ async fn update_prekeys(
     )) else {
         return StatusCode::BAD_REQUEST;
     };
-    if !verify_signature(&device.signing_public_key, &payload, &input.signature) {
+    if !verify_signature(&device_signing_key, &payload, &input.signature) {
         return StatusCode::UNAUTHORIZED;
     }
+    // authorization_signature 覆盖了 prekeyVersion/prekeyBundle 字段，
+    // prekey 轮换后必须用账户签名密钥对新的设备记录 payload 重新签名并同步存储，
+    // 否则对端查询 directory 时 `observeAndCheckIdentity` 验签会失败。
+    let account_signing_key = match store.accounts.get(&username) {
+        Some(account) => account.signing_public_key.clone(),
+        None => return StatusCode::NOT_FOUND,
+    };
+    let Ok(authorization_payload) = serde_json::to_vec(&(
+        protocol_version,
+        device_id,
+        &username,
+        &device_signing_key,
+        input.prekey_version,
+        &input.prekey_bundle,
+        created_at,
+    )) else {
+        return StatusCode::BAD_REQUEST;
+    };
+    if !verify_signature(
+        &account_signing_key,
+        &authorization_payload,
+        &input.authorization_signature,
+    ) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    let Some(device) = store.devices.get_mut(&device_id) else {
+        return StatusCode::NOT_FOUND;
+    };
     let previous = device.clone();
     device.prekey_version = input.prekey_version;
     device.prekey_bundle = input.prekey_bundle;
+    device.authorization_signature = input.authorization_signature;
     let updated = device.clone();
     drop(store);
     if let Some(database) = &state.persistence
@@ -2938,16 +2982,32 @@ mod tests {
     async fn prekey_updates_are_signed_and_strictly_monotonic() {
         let (state, headers, device_id) = authenticated_state("maya_chen");
         let signing_key = SigningKey::from_bytes(&[9; 32]);
+        let account_key = SigningKey::from_bytes(&[7; 32]);
         let updated_at = unix_now();
         let bundle = "new-pqxdh-bundle".to_string();
         let payload =
             serde_json::to_vec(&(PROTOCOL_VERSION, device_id, 2_u64, &bundle, updated_at)).unwrap();
+        // 构造与 onboarding 一致的 7 元组设备 payload，并用账户密钥签名，
+        // 确保 prekey 轮换后 authorization_signature 同步刷新。
+        let device = state.inner.lock().await.devices.get(&device_id).unwrap().clone();
+        let authorization_payload = serde_json::to_vec(&(
+            device.protocol_version,
+            device_id,
+            &device.username,
+            &device.signing_public_key,
+            2_u64,
+            &bundle,
+            device.created_at,
+        ))
+        .unwrap();
         let input = PreKeyUpdate {
             protocol_version: PROTOCOL_VERSION,
             prekey_version: 2,
             prekey_bundle: bundle,
             updated_at,
             signature: URL_SAFE_NO_PAD.encode(signing_key.sign(&payload).to_bytes()),
+            authorization_signature: URL_SAFE_NO_PAD
+                .encode(account_key.sign(&authorization_payload).to_bytes()),
         };
         assert_eq!(
             update_prekeys(
@@ -2979,6 +3039,8 @@ mod tests {
                     prekey_bundle: replay_bundle,
                     updated_at,
                     signature: URL_SAFE_NO_PAD.encode(signing_key.sign(&replay_payload).to_bytes()),
+                    authorization_signature: URL_SAFE_NO_PAD
+                        .encode(account_key.sign(&authorization_payload).to_bytes()),
                 })
             )
             .await,

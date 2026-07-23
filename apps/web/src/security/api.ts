@@ -117,6 +117,17 @@ export async function publishSignalPreKeys(
   const prekeyVersion = profile.signalPreKeyVersion + 1;
   const prekeyBundle = publishedPreKeyBundle(profile);
   const updatedAt = Math.floor(Date.now() / 1000);
+  // authorizationSignature 覆盖了 prekeyVersion/prekeyBundle 字段，
+  // prekey 轮换后旧签名会失效，必须同步用账户密钥对新的设备 payload 重签。
+  const previousPreKeyVersion = profile.signalPreKeyVersion;
+  profile.signalPreKeyVersion = prekeyVersion;
+  let authorizationSignature: string;
+  try {
+    authorizationSignature = await signWithAccount(profile, devicePayload(profile, prekeyBundle));
+  } finally {
+    // 仅当请求成功后才会真正推进版本号；签名阶段失败需要回滚以保持本地状态一致
+    profile.signalPreKeyVersion = previousPreKeyVersion;
+  }
   const signature = await signWithDevice(
     profile,
     encoder.encode(JSON.stringify([
@@ -139,6 +150,7 @@ export async function publishSignalPreKeys(
       prekeyBundle,
       updatedAt,
       signature,
+      authorizationSignature,
     }),
   });
   if (!response.ok) throw new Error(`pre-key publish failed: ${response.status}`);
