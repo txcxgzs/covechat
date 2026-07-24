@@ -16,4 +16,5 @@ export type Message = {
   delivered?: boolean;
   expiresAt?: number;
   replyTo?: import("./security/message-content").ReplyReference;
+  attachment?: import("@covechat/protocol").AttachmentReference;
 };

@@ -331,13 +331,14 @@ function Composer({ onSend, onAttachment, replyTo, onCancelReply, t }: {
   );
 }
 
-function InteractiveMessage({ activeSearchMatch = false, locale, message, onReply, onReport, onSelect = NOOP_SELECT_MESSAGE, searchMatch = false, selected = false, selectionMode = false }: {
+function InteractiveMessage({ activeSearchMatch = false, locale, message, onDownloadAttachment, onReply, onReport, onSelect = NOOP_SELECT_MESSAGE, searchMatch = false, selected = false, selectionMode = false }: {
   activeSearchMatch?: boolean;
   locale: Locale;
   message: Message;
   onReply: (message: Message) => void;
   onReport?: (message: Message) => void;
   onSelect?: (messageId: string) => void;
+  onDownloadAttachment?: (attachment: import("@covechat/protocol").AttachmentReference) => void;
   searchMatch?: boolean;
   selected?: boolean;
   selectionMode?: boolean;
@@ -403,11 +404,28 @@ function InteractiveMessage({ activeSearchMatch = false, locale, message, onRepl
         <span className={`message-selection-check ${selected ? "selected" : ""}`} aria-hidden="true"><Check /></span>
       ) : null}
       {message.from === "them" ? <span className="avatar avatar-small">MC</span> : null}
-      <div className="bubble">
-        {message.replyTo ? <blockquote data-reply-id={message.replyTo.messageId}>{message.replyTo.excerpt}</blockquote> : null}
-        <p>{message.text}</p>
-        <footer><time>{message.time}</time>{message.delivered ? <Check aria-label={isChinese ? "已发送" : "Sent"} /> : <LockKeyhole aria-label={isChinese ? "已加密" : "Encrypted"} />}</footer>
-      </div>
+      {message.text || message.replyTo ? (
+        <div className="bubble">
+          {message.replyTo ? <blockquote data-reply-id={message.replyTo.messageId}>{message.replyTo.excerpt}</blockquote> : null}
+          {message.text ? <p>{message.text}</p> : null}
+          <footer><time>{message.time}</time>{message.from === "me" ? (message.delivered ? <Check aria-label={isChinese ? "已发送" : "Sent"} /> : <LockKeyhole aria-label={isChinese ? "已加密" : "Encrypted"} />) : null}</footer>
+        </div>
+      ) : null}
+      {message.attachment ? (
+        <div className="bubble attachment-bubble">
+          <strong><LockKeyhole /> {isChinese ? "加密附件" : "Encrypted attachment"}</strong>
+          <p>{message.attachment.fileName}</p>
+          <small>{new Intl.NumberFormat(locale).format(message.attachment.plaintextSize)} bytes</small>
+          {onDownloadAttachment ? (
+            <button type="button" onClick={() => onDownloadAttachment(message.attachment!)}>
+              {isChinese ? "下载并解密" : "Download & Decrypt"}
+            </button>
+          ) : null}
+          {!(message.text || message.replyTo) ? (
+            <footer><time>{message.time}</time>{message.from === "me" ? (message.delivered ? <Check aria-label={isChinese ? "已发送" : "Sent"} /> : <LockKeyhole aria-label={isChinese ? "已加密" : "Encrypted"} />) : null}</footer>
+          ) : null}
+        </div>
+      ) : null}
       <span className="swipe-reply-indicator" aria-hidden="true"><Reply /></span>
       {menu ? (
         <div className="message-menu" style={{ left: menu.x, top: menu.y }} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
@@ -436,7 +454,6 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
   const [messages, setMessages] = useState<Message[]>([]);
   const [replyTo, setReplyTo] = useState<Message>();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-  const [attachments, setAttachments] = useState<AttachmentReference[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState("");
   const [disappearAfter, setDisappearAfter] = useState(0);
   const [disappearDropdownOpen, setDisappearDropdownOpen] = useState(false);
@@ -497,14 +514,13 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
     setReplyTo(undefined);
     if (!/^[a-z0-9_]{3,32}$/u.test(recipient)) {
       setMessages([]);
-      setAttachments([]);
       return;
     }
     void loadConversationHistory(profile, recipient).then(async (history) => {
-      setMessages(history.filter((item) => item.body).map((item) => ({
+      setMessages(history.filter((item) => item.body || item.attachment).map((item) => ({
         id: item.id,
         from: item.from,
-        text: item.body!,
+        text: item.body || "",
         time: new Intl.DateTimeFormat(locale, {
           hour: "2-digit",
           minute: "2-digit",
@@ -512,8 +528,8 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
         delivered: item.delivered ?? false,
         expiresAt: item.expiresAt,
         replyTo: item.reply,
+        attachment: item.attachment,
       })));
-      setAttachments(history.flatMap((item) => item.attachment ? [item.attachment] : []));
       const latestIncoming = history.filter((item) => item.from === "them").at(-1)?.createdAt;
       if (latestIncoming) {
         await markConversationRead(profile, recipient, latestIncoming);
@@ -551,7 +567,6 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
     const prune = () => {
       const now = Date.now();
       setMessages((current) => current.filter((message) => !message.expiresAt || message.expiresAt > now));
-      setAttachments((current) => current.filter((attachment) => attachment.expiresAt * 1000 > now));
     };
     const timer = window.setInterval(prune, 30_000);
     return () => window.clearInterval(timer);
@@ -600,10 +615,10 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
         const known = new Set(current.map((message) => message.id));
         return [
           ...current,
-          ...visible.filter((message) => message.body && !known.has(message.envelopeId)).map((message) => ({
+          ...visible.filter((message) => (message.body || message.attachment) && !known.has(message.envelopeId)).map((message) => ({
             id: message.envelopeId,
             from: "them" as const,
-            text: message.body!,
+            text: message.body || "",
             time: new Intl.DateTimeFormat(locale, {
               hour: "2-digit",
               minute: "2-digit",
@@ -611,6 +626,7 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
             delivered: true,
             expiresAt: message.expiresAt,
             replyTo: message.reply,
+            attachment: message.attachment,
           })),
         ];
       });
@@ -619,15 +635,6 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
         onReceivedText(lastText);
         if (!mutedRef.current) playUiSound("receive");
       }
-      setAttachments((current) => {
-        const known = new Set(current.map((attachment) => attachment.objectId));
-        return [
-          ...current,
-          ...visible
-            .flatMap((message) => message.attachment ? [message.attachment] : [])
-            .filter((attachment) => !known.has(attachment.objectId)),
-        ];
-      });
     }
     void refresh();
     const unsubscribe = subscribeEncryptedMailbox(session, () => void refresh());
@@ -730,7 +737,6 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
       });
       onHistoryChange();
       void syncEncryptedBackup(profile, session).catch(() => undefined);
-      setAttachments((current) => [...current, reference]);
       setAttachmentStatus("");
       setUploadProgress(null);
     } catch {
@@ -820,21 +826,10 @@ function Chat({ locale, onDetails, onHistoryChange, onMenu, onNewConversation, o
           onReply={setReplyTo}
           onReport={reportMessage}
           onSelect={toggleMessageSelection}
+          onDownloadAttachment={downloadAttachment}
           selected={selectedIds.has(message.id)}
           selectionMode={selectedIds.size > 0}
         />)}
-        {attachments.map((attachment) => (
-          <article className="message-row me" key={attachment.objectId}>
-            <div className="bubble attachment-bubble">
-              <strong><LockKeyhole /> {t("attachmentReady")}</strong>
-              <p>{attachment.fileName}</p>
-              <small>{new Intl.NumberFormat(locale).format(attachment.plaintextSize)} bytes</small>
-              <button type="button" onClick={() => void downloadAttachment(attachment)}>
-                {t("downloadAttachment")}
-              </button>
-            </div>
-          </article>
-        ))}
         {attachmentStatus ? <p className="attachment-status" role="status">{attachmentStatus}</p> : null}
         {/* 上传进度条：百分比 + 已上传/总字节 */}
         {uploadProgress ? (

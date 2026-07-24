@@ -229,6 +229,9 @@ export async function publishSignalPreKeys(
   if (!response.ok) throw new Error(`pre-key publish failed: ${response.status}`);
   profile.signalPreKeyVersion = prekeyVersion;
   profile.signalPublished = true;
+  // prekey 轮换后本端在服务端的 device record 已更新，旧 directory 缓存失效，
+  // 必须清除以免后续 selfHeal/对端查询复用过期数据。
+  invalidateDirectoryCache(profile.username);
 }
 
 function authenticatedHeaders(session: AuthSession): HeadersInit {
@@ -239,11 +242,111 @@ export async function lookupDirectory(
   username: string,
   session: AuthSession,
 ): Promise<DirectoryResponse> {
-  const response = await authenticatedFetch(`/api/v1/directory/${encodeURIComponent(username)}`, {
-    headers: authenticatedHeaders(session),
-  }, session);
-  if (!response.ok) throw new Error(`directory lookup failed: ${response.status}`);
-  return response.json() as Promise<DirectoryResponse>;
+  return lookupDirectoryInternal(username, session, false);
+}
+
+/**
+ * 强制刷新 directory 缓存并重新查询。
+ *
+ * 用于 prekey 轮换 / self-heal 等场景：本端或对端的设备记录刚发生过变更，
+ * 旧缓存不再反映服务端真实状态，必须重新拉取。
+ */
+async function lookupDirectoryFresh(
+  username: string,
+  session: AuthSession,
+): Promise<DirectoryResponse> {
+  return lookupDirectoryInternal(username, session, true);
+}
+
+async function lookupDirectoryInternal(
+  username: string,
+  session: AuthSession,
+  forceRefresh: boolean,
+): Promise<DirectoryResponse> {
+  const normalized = username.trim().toLowerCase();
+  if (!forceRefresh) {
+    const cached = directoryCacheGet(normalized);
+    if (cached) return cached;
+  }
+  // 并发去重：同一 username 同时进行的查询合并成单个网络请求，
+  // 避免收消息循环里多条消息触发并发 lookup 击穿限流。
+  // 注意：forceRefresh 模式下不能复用 inflight——可能命中 prekey 轮换前发起的
+  // 旧请求，导致 selfHeal 二次验证拿到过期数据而误判服务端未升级。
+  if (!forceRefresh) {
+    const inflight = directoryInflightGet(normalized);
+    if (inflight) return inflight;
+  }
+  const promise = (async () => {
+    const response = await authenticatedFetch(`/api/v1/directory/${encodeURIComponent(normalized)}`, {
+      headers: authenticatedHeaders(session),
+    }, session);
+    if (!response.ok) throw new Error(`directory lookup failed: ${response.status}`);
+    const result = await response.json() as DirectoryResponse;
+    directoryCacheSet(normalized, result);
+    return result;
+  })();
+  directoryInflightSet(normalized, promise);
+  try {
+    return await promise;
+  } finally {
+    // 仅当 inflight 仍指向当前 promise 时才删除。
+    // forceRefresh 场景下可能覆盖了之前的 inflight，旧 promise 完成时不应误删新 promise 的记录。
+    directoryInflightDeleteIfMatch(normalized, promise);
+  }
+}
+
+/** 清除指定 username 的 directory 缓存。prekey 轮换后本端设备记录变更，旧缓存失效。 */
+function invalidateDirectoryCache(username: string): void {
+  const normalized = username.trim().toLowerCase();
+  directoryCache.delete(normalized);
+}
+
+/**
+ * Directory 缓存与并发去重。
+ *
+ * 服务端对 /v1/directory 按 device_id 限流（60 次/60 秒），但发消息和收消息
+ * 循环都会触发 lookupDirectory，活跃对话极易击穿限流返回 429。
+ *
+ * 这里加两层防御：
+ * 1. 短 TTL 内存缓存（30 秒）：同一 username 在 TTL 内复用结果，避免重复请求。
+ *    directory 数据本质上是设备 prekey bundle，prekey 轮换频率远低于 30 秒，
+ *    即便对端在缓存期内轮换了 prekey，本端建立 session 用的旧 bundle 仍可解密
+ *    （Signal 协议设计如此），最多触发一次 prekey 消息重发。
+ * 2. in-flight 去重：同一 username 的并发请求合并为单个 fetch。
+ */
+const DIRECTORY_CACHE_TTL_MS = 30_000;
+const directoryCache = new Map<string, { value: DirectoryResponse; expiresAt: number }>();
+const directoryInflight = new Map<string, Promise<DirectoryResponse>>();
+
+function directoryCacheGet(username: string): DirectoryResponse | undefined {
+  const entry = directoryCache.get(username);
+  if (!entry) return undefined;
+  if (Date.now() >= entry.expiresAt) {
+    directoryCache.delete(username);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function directoryCacheSet(username: string, value: DirectoryResponse): void {
+  directoryCache.set(username, { value, expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS });
+}
+
+function directoryInflightGet(username: string): Promise<DirectoryResponse> | undefined {
+  return directoryInflight.get(username);
+}
+
+function directoryInflightSet(username: string, promise: Promise<DirectoryResponse>): void {
+  directoryInflight.set(username, promise);
+}
+
+function directoryInflightDeleteIfMatch(
+  username: string,
+  promise: Promise<DirectoryResponse>,
+): void {
+  if (directoryInflight.get(username) === promise) {
+    directoryInflight.delete(username);
+  }
 }
 
 /**
@@ -284,7 +387,9 @@ export async function selfHealDeviceSignature(
   // 二次验证：确认服务端真的更新了 authorization_signature。
   // 旧版服务端 serde 会忽略未知字段 authorizationSignature，返回成功但不更新签名，
   // 此时需要明确告知部署方升级服务端，而不是让用户反复尝试。
-  const refreshed = await lookupDirectory(profile.username, session);
+  // 必须强制刷新缓存：publishSignalPreKeys 虽然已清除本端缓存，但并发场景下
+  // 其他调用可能已经把旧 directory 重新写入缓存，导致二次验证拿到过期数据。
+  const refreshed = await lookupDirectoryFresh(profile.username, session);
   const refreshedDevice = refreshed.devices.find(
     (device) => device.deviceId === profile.deviceId && !device.revokedAt,
   );
