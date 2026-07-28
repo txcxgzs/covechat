@@ -24,6 +24,7 @@ import {
   type AuthenticatedProfile,
 } from "./api";
 import { createEncryptedBackup, decryptBackup } from "./backup";
+import { parseDeviceRecoveryHash } from "./device-transfer";
 
 type GateState = "checking" | "setup" | "recover" | "unlock" | "recovery" | "ready";
 
@@ -42,8 +43,18 @@ export function SecurityGate({ children }: {
   const t: Translate = (key) => copy[locale][key];
 
   useEffect(() => {
+    const transfer = parseDeviceRecoveryHash(window.location.hash);
+    if (transfer) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    }
     void hasLocalVault()
-      .then((exists) => setState(exists ? "unlock" : "setup"))
+      .then((exists) => {
+        if (transfer && !exists) {
+          setUsername(transfer.username);
+          setRecoverySecret(transfer.recoverySecret);
+        }
+        setState(transfer && !exists ? "recover" : exists ? "unlock" : "setup");
+      })
       .catch(() => {
         setError(t("vaultError"));
         setState("setup");

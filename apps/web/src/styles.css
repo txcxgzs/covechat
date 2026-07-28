@@ -526,6 +526,12 @@ body { overflow: hidden; background: #eef3f6; }
 .dialog-fields > small { margin-top: -7px; color: var(--muted); }
 .account-dialog footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 26px; }
 .recovery-code { display: block; padding: 16px; border: 1px solid #cae4e2; border-radius: 10px; color: #166c6e; background: #f0faf9; overflow-wrap: anywhere; line-height: 1.7; }
+.device-qr-dialog { text-align: center; }
+.device-qr-dialog > p { text-align: left; }
+.device-recovery-qr { display: block; width: min(320px, 78vw); aspect-ratio: 1; margin: 8px auto 20px; padding: 10px; border: 1px solid #d7e4e6; border-radius: 18px; background: white; box-shadow: 0 16px 40px #092b4214; }
+.device-qr-loading { width: min(320px, 78vw); aspect-ratio: 1; margin: 8px auto 20px; display: grid; place-content: center; justify-items: center; gap: 12px; border: 1px dashed #b9d4d3; border-radius: 18px; color: var(--muted); background: #f5faf9; }
+.device-qr-loading svg { width: 26px; animation: spin 900ms linear infinite; }
+.device-qr-dialog .dialog-warning { text-align: left; }
 .dialog-device-list { display: grid; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
 .dialog-device-list > div { min-height: 66px; display: flex; align-items: center; gap: 12px; padding: 11px 13px; }
 .dialog-device-list > div + div { border-top: 1px solid var(--line); }
