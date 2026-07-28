@@ -36,6 +36,15 @@ describe("MLS membership commit authorization", () => {
     expect(isAuthorizedGroupCommit(profileWithAdmins(["device-admin"]), "missing", "device-admin")).toBe(false);
     expect(isAuthorizedGroupCommit(profileWithAdmins([]), "group-1", "device-local")).toBe(false);
   });
+
+  it("accepts a current member when the encrypted invite policy allows anyone", () => {
+    const profile = profileWithAdmins(["device-admin"]);
+    const metadata = profile.mls.groups?.[0];
+    if (!metadata) throw new Error("test group missing");
+    metadata.invitePolicy = "anyone";
+    expect(isAuthorizedGroupCommit(profile, "group-1", "device-member")).toBe(true);
+    expect(isAuthorizedGroupCommit(profile, "group-1", "unknown-device")).toBe(false);
+  });
 });
 
 describe("MLS sender binding", () => {
@@ -106,5 +115,20 @@ describe("encrypted group policy", () => {
       ...policy,
       adminDeviceIds: ["unknown-device"],
     })).toBe(false);
+  });
+
+  it("accepts an authenticated policy transition to member invitations", () => {
+    const profile = profileWithAdmins(["device-admin"]);
+    const metadata = profile.mls.groups?.[0];
+    if (!metadata) throw new Error("test group missing");
+    metadata.policyRevision = 3;
+    expect(isAuthorizedGroupPolicy(metadata, "device-admin", {
+      version: 1,
+      type: "group-policy",
+      revision: 4,
+      adminDeviceIds: ["device-admin"],
+      invitePolicy: "anyone",
+      createdAt: 1,
+    })).toBe(true);
   });
 });

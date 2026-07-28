@@ -1200,7 +1200,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
             <small><LockKeyhole /> {t("mlsProtocol")} · Epoch {selected.epoch}</small>
           </section>
           <div className="group-details-scroll">
-            {isAdmin ? (
+            {isAdmin || (selected.invitePolicy ?? "admins") === "anyone" ? (
               <section className="group-details-section">
                 <h3>{t("addMember")}</h3>
                 <form className="group-invite" onSubmit={(event) => void invite(event)}>
@@ -1231,7 +1231,7 @@ function GroupWorkspace({ locale, profile, session, t }: {
               <section className="group-details-section invite-policy-section">
                 <h3>{t("invitePolicy")}</h3>
                 <label><input type="radio" name={`invite-policy-${selected.groupId}`} checked={(selected.invitePolicy ?? "admins") === "admins"} onChange={() => void changeInvitePolicy("admins")} />{t("invitePolicyAdmins")}</label>
-                <label className="disabled"><input type="radio" name={`invite-policy-${selected.groupId}`} checked={(selected.invitePolicy ?? "admins") === "anyone"} disabled onChange={() => void changeInvitePolicy("anyone")} />{t("invitePolicyAnyone")}</label>
+                <label><input type="radio" name={`invite-policy-${selected.groupId}`} checked={(selected.invitePolicy ?? "admins") === "anyone"} onChange={() => void changeInvitePolicy("anyone")} />{t("invitePolicyAnyone")}</label>
               </section>
             ) : null}
             <section className="leave-group-section"><button className="leave-group-btn" onClick={() => {

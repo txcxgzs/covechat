@@ -1,10 +1,11 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
-import { ChevronRight, Copy, Database, Eye, EyeOff, KeyRound, LockKeyhole, Monitor, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
+import { ChevronRight, Cloud, Copy, Database, Eye, EyeOff, KeyRound, LockKeyhole, Monitor, RefreshCw, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
 import type { AuthSession, DeviceRecord } from "@covechat/protocol";
 import type { Locale } from "./i18n";
 import type { SecureProfile } from "./security/vault";
 import { deleteLocalVault, saveSecureProfile, unlockSecureProfile } from "./security/vault";
 import { deleteOwnAccount, listOwnDevices, revokeOwnDevice } from "./security/api";
+import { syncEncryptedBackup } from "./security/backup";
 import { Button } from "./ui-controls";
 
 type Dialog = "password" | "recovery" | "devices" | "clear" | "delete" | null;
@@ -20,7 +21,8 @@ export function ProfileWorkspace({ locale, profile, session }: { locale: Locale;
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [pendingDevice, setPendingDevice] = useState<string | null>(null);
   const [status, setStatus] = useState("");
-  const backupVersion = localStorage.getItem(`covechat:backup_version:${profile.username}`) ?? "0";
+  const [backupVersion, setBackupVersion] = useState(() => localStorage.getItem(`covechat:backup_version:${profile.username}`) ?? "0");
+  const [backupSyncing, setBackupSyncing] = useState(false);
   const refreshDevices = useCallback(() => void listOwnDevices(session).then(setDevices).catch(() => setStatus(zh ? "设备列表读取失败" : "Unable to load devices")), [session.accessToken, zh]);
 
   useEffect(refreshDevices, [refreshDevices]);
@@ -46,6 +48,19 @@ export function ProfileWorkspace({ locale, profile, session }: { locale: Locale;
     if (!pendingDevice) return;
     await revokeOwnDevice(pendingDevice, session);
     setPendingDevice(null); refreshDevices();
+  }
+
+  async function syncBackupNow() {
+    setBackupSyncing(true);
+    try {
+      await syncEncryptedBackup(profile, session);
+      setBackupVersion(localStorage.getItem(`covechat:backup_version:${profile.username}`) ?? backupVersion);
+      setStatus(zh ? "加密云备份已同步；服务器只能看到密文。" : "Encrypted cloud backup synced; the server only sees ciphertext.");
+    } catch {
+      setStatus(zh ? "备份同步失败，本机加密数据未受影响，请检查网络后重试。" : "Backup sync failed. Local encrypted data is safe; check the network and retry.");
+    } finally {
+      setBackupSyncing(false);
+    }
   }
 
   async function clearLocalData() {
@@ -76,6 +91,10 @@ export function ProfileWorkspace({ locale, profile, session }: { locale: Locale;
       <section className="account-section"><h2>{zh ? "安全" : "Security"}</h2><div className="account-list">
         {row(<LockKeyhole />, zh ? "本地解锁口令" : "Local passphrase", zh ? "用于解锁此设备上的加密数据。" : "Unlocks encrypted data on this device.", <><span className="masked-value">••••••••••••</span><Button size="small" variant="secondary" onClick={() => setDialog("password")}>{zh ? "修改" : "Change"}</Button></>)}
         {row(<ShieldCheck />, zh ? "锁定当前会话" : "Lock current session", zh ? "立即锁定此设备上的会话。" : "Immediately lock this device session.", <Button size="small" variant="secondary" onClick={() => window.location.reload()}>{zh ? "立即锁定" : "Lock now"}</Button>)}
+      </div></section>
+      <section className="account-section"><h2>{zh ? "数据存储" : "Data storage"}</h2><div className="account-list">
+        {row(<Database />, zh ? "本机加密保险库" : "Encrypted vault on this device", zh ? "身份密钥、会话密钥和可解密的聊天历史经口令加密后存放在此浏览器；未解锁时不可读取。" : "Identity keys, session keys, and decryptable history are passphrase-encrypted in this browser and unreadable while locked.", <span className="current-device-badge">{zh ? "本机密文" : "Local ciphertext"}</span>)}
+        {row(<Cloud />, zh ? "端到端加密云备份" : "End-to-end encrypted cloud backup", zh ? `包含恢复所需密钥与加密聊天历史 · 版本 ${backupVersion}；加密在本机完成。` : `Contains recovery keys and encrypted history · version ${backupVersion}; encryption happens locally.`, <Button size="small" variant="secondary" loading={backupSyncing} icon={<RefreshCw />} onClick={() => void syncBackupNow()}>{zh ? "立即同步" : "Sync now"}</Button>)}
       </div></section>
       <section className="account-section"><h2>{zh ? "已授权设备" : "Authorized devices"}</h2><div className="account-list">
         {row(<Monitor />, zh ? "当前浏览器" : "Current browser", zh ? "本设备 · 当前会话" : "This device · Current session", <span className="current-device-badge">{zh ? "当前设备" : "Current"}</span>)}

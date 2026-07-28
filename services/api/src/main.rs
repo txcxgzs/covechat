@@ -1433,18 +1433,24 @@ async fn update_prekeys(
     }
     // 先以不可变方式取出构造 payload 所需的字段，避免后续同时持有
     // `store.devices` 的可变借用与 `store.accounts` 的不可变借用。
-    let (protocol_version, username, device_signing_key, created_at, current_prekey_version, revoked_at) =
-        match store.devices.get(&device_id) {
-            Some(device) => (
-                device.protocol_version,
-                device.username.clone(),
-                device.signing_public_key.clone(),
-                device.created_at,
-                device.prekey_version,
-                device.revoked_at,
-            ),
-            None => return StatusCode::NOT_FOUND,
-        };
+    let (
+        protocol_version,
+        username,
+        device_signing_key,
+        created_at,
+        current_prekey_version,
+        revoked_at,
+    ) = match store.devices.get(&device_id) {
+        Some(device) => (
+            device.protocol_version,
+            device.username.clone(),
+            device.signing_public_key.clone(),
+            device.created_at,
+            device.prekey_version,
+            device.revoked_at,
+        ),
+        None => return StatusCode::NOT_FOUND,
+    };
     if revoked_at.is_some() || input.prekey_version != current_prekey_version + 1 {
         return StatusCode::CONFLICT;
     }
@@ -2989,7 +2995,14 @@ mod tests {
             serde_json::to_vec(&(PROTOCOL_VERSION, device_id, 2_u64, &bundle, updated_at)).unwrap();
         // 构造与 onboarding 一致的 7 元组设备 payload，并用账户密钥签名，
         // 确保 prekey 轮换后 authorization_signature 同步刷新。
-        let device = state.inner.lock().await.devices.get(&device_id).unwrap().clone();
+        let device = state
+            .inner
+            .lock()
+            .await
+            .devices
+            .get(&device_id)
+            .unwrap()
+            .clone();
         let authorization_payload = serde_json::to_vec(&(
             device.protocol_version,
             device_id,

@@ -75,7 +75,7 @@ type GroupPolicyPayload = {
   type: "group-policy";
   revision: number;
   adminDeviceIds: string[];
-  invitePolicy: "admins";
+  invitePolicy: "anyone" | "admins";
   createdAt: number;
 };
 
@@ -224,7 +224,9 @@ export function isAuthorizedGroupCommit(
   senderDeviceId: string,
 ): boolean {
   const metadata = groups(profile).find((group) => group.groupId === groupId);
-  return Boolean(metadata && (metadata.adminDeviceIds ?? []).includes(senderDeviceId));
+  if (!metadata || !metadata.memberDeviceIds.includes(senderDeviceId)) return false;
+  return metadata.invitePolicy === "anyone"
+    || (metadata.adminDeviceIds ?? []).includes(senderDeviceId);
 }
 
 export function groupLeaveRequestRecipient(profile: SecureProfile, groupId: string): string {
@@ -255,7 +257,7 @@ export function isAuthorizedGroupPolicy(
     && Array.isArray(payload.adminDeviceIds)
     && payload.adminDeviceIds.length === 1
     && metadata.memberDeviceIds.includes(payload.adminDeviceIds[0])
-    && payload.invitePolicy === "admins"
+    && (payload.invitePolicy === "admins" || payload.invitePolicy === "anyone")
   );
 }
 
@@ -272,12 +274,27 @@ export async function setGroupInvitePolicy(
   if (!isGroupAdmin(profile, groupId)) {
     throw new Error("only admins can change invite policy");
   }
-  if (policy !== "admins") {
-    throw new Error("member invitations remain admin-only until authenticated group policy sync is implemented");
+  if (metadata.invitePolicy === policy) return;
+  const previousPolicy = metadata.invitePolicy ?? "admins";
+  const previousRevision = metadata.policyRevision ?? 1;
+  try {
+    await sendEncryptedGroupApplication(profile, session, metadata, {
+      version: 1,
+      type: "group-policy",
+      revision: previousRevision + 1,
+      adminDeviceIds: [...(metadata.adminDeviceIds ?? [profile.deviceId])],
+      invitePolicy: policy,
+      createdAt: Date.now(),
+    });
+    metadata.invitePolicy = policy;
+    metadata.policyRevision = previousRevision + 1;
+    await saveMlsState(profile);
+    void syncEncryptedBackup(profile, session).catch(() => undefined);
+  } catch (error) {
+    metadata.invitePolicy = previousPolicy;
+    metadata.policyRevision = previousRevision;
+    throw error;
   }
-  metadata.invitePolicy = policy;
-  await saveMlsState(profile);
-  void syncEncryptedBackup(profile, session).catch(() => undefined);
 }
 
 function parsePublishedBundle(
@@ -352,7 +369,7 @@ export async function addGroupMember(
   const metadata = groups(profile).find((group) => group.groupId === groupId);
   if (!metadata) throw new Error("group not found");
   // 邀请策略校验：admins 策略下，非管理员拒绝邀请。
-  if (!isGroupAdmin(profile, groupId)) {
+  if (metadata.invitePolicy !== "anyone" && !isGroupAdmin(profile, groupId)) {
     throw new Error("only admins can invite members");
   }
   const directory = await lookupDirectory(username.trim().toLowerCase(), session);
@@ -513,7 +530,7 @@ async function sendEncryptedGroupPolicy(
     type: "group-policy",
     revision: metadata.policyRevision ?? 1,
     adminDeviceIds: admins,
-    invitePolicy: "admins",
+    invitePolicy: metadata.invitePolicy ?? "admins",
     createdAt: Date.now(),
   }, recipients);
 }
@@ -544,7 +561,7 @@ export async function transferEncryptedGroupAdministration(
       type: "group-policy",
       revision: nextRevision,
       adminDeviceIds: [newAdminDeviceId],
-      invitePolicy: "admins",
+      invitePolicy: metadata.invitePolicy ?? "admins",
       createdAt: Date.now(),
     });
     metadata.adminDeviceIds = [newAdminDeviceId];
