@@ -7,9 +7,8 @@ import { deleteLocalVault, saveSecureProfile, unlockSecureProfile } from "./secu
 import { deleteOwnAccount, listOwnDevices, revokeOwnDevice } from "./security/api";
 import { syncEncryptedBackup } from "./security/backup";
 import { Button } from "./ui-controls";
-import { buildDeviceRecoveryUrl } from "./security/device-transfer";
 
-type Dialog = "password" | "recovery" | "device-qr" | "devices" | "clear" | "delete" | null;
+type Dialog = "password" | "recovery" | "device-pair-help" | "devices" | "clear" | "delete" | null;
 
 export function ProfileWorkspace({ locale, profile, session }: { locale: Locale; profile: SecureProfile; session: AuthSession }) {
   const zh = locale === "zh-CN";
@@ -24,30 +23,13 @@ export function ProfileWorkspace({ locale, profile, session }: { locale: Locale;
   const [status, setStatus] = useState("");
   const [backupVersion, setBackupVersion] = useState(() => localStorage.getItem(`covechat:backup_version:${profile.username}`) ?? "0");
   const [backupSyncing, setBackupSyncing] = useState(false);
-  const [deviceQr, setDeviceQr] = useState("");
   const refreshDevices = useCallback(() => void listOwnDevices(session).then(setDevices).catch(() => setStatus(zh ? "设备列表读取失败" : "Unable to load devices")), [session.accessToken, zh]);
 
   useEffect(refreshDevices, [refreshDevices]);
 
-  useEffect(() => {
-    if (dialog !== "device-qr" || deviceQr) return;
-    let active = true;
-    const recoveryUrl = buildDeviceRecoveryUrl(window.location.origin, profile.username, profile.recoverySecret);
-    void import("qrcode")
-      .then(({ toDataURL }) => toDataURL(recoveryUrl, {
-        width: 320,
-        margin: 2,
-        errorCorrectionLevel: "M",
-        color: { dark: "#0a2a42", light: "#ffffff" },
-      }))
-      .then((dataUrl) => { if (active) setDeviceQr(dataUrl); })
-      .catch(() => { if (active) setStatus(zh ? "二维码生成失败，请改用恢复密钥。" : "Could not create the QR code. Use the recovery key instead."); });
-    return () => { active = false; };
-  }, [dialog, deviceQr, profile.recoverySecret, profile.username, zh]);
-
   function closeDialog() {
     setDialog(null); setCurrentPassphrase(""); setNewPassphrase(""); setConfirmPassphrase("");
-    setDeleteConfirmation(""); setPendingDevice(null); setShowPasswords(false); setDeviceQr("");
+    setDeleteConfirmation(""); setPendingDevice(null); setShowPasswords(false);
   }
 
   async function changePassphrase(event: FormEvent) {
@@ -116,7 +98,7 @@ export function ProfileWorkspace({ locale, profile, session }: { locale: Locale;
       </div></section>
       <section className="account-section"><h2>{zh ? "已授权设备" : "Authorized devices"}</h2><div className="account-list">
         {row(<Monitor />, zh ? "当前浏览器" : "Current browser", zh ? "本设备 · 当前会话" : "This device · Current session", <span className="current-device-badge">{zh ? "当前设备" : "Current"}</span>)}
-        {row(<QrCode />, zh ? "在新设备上恢复" : "Recover on a new device", zh ? "用新设备相机扫码，自动填写账户和恢复密钥；随后由你设置该设备的本地口令。" : "Scan with the new device to fill the account and recovery key, then choose its local passphrase.", <Button size="small" variant="secondary" icon={<QrCode />} onClick={() => setDialog("device-qr")}>{zh ? "显示二维码" : "Show QR"}</Button>)}
+        {row(<QrCode />, zh ? "安全连接新设备" : "Securely link a new device", zh ? "由新设备生成一次性二维码，本设备确认后通过端到端加密交接恢复资料。" : "The new device creates a one-time QR. Approve here to transfer recovery details end to end.", <Button size="small" variant="secondary" icon={<QrCode />} onClick={() => setDialog("device-pair-help")}>{zh ? "查看步骤" : "View steps"}</Button>)}
         {row(<Monitor />, zh ? "其他已授权设备" : "Other authorized devices", zh ? `${otherDevices.length} 台设备可以访问你的加密账户。` : `${otherDevices.length} devices can access your encrypted account.`, <Button size="small" variant="secondary" onClick={() => setDialog("devices")}>{zh ? "查看设备" : "View devices"}</Button>)}
       </div></section>
       <section className="account-section account-danger"><h2>{zh ? "数据与账户" : "Data & account"}</h2><div className="account-list">
@@ -127,7 +109,7 @@ export function ProfileWorkspace({ locale, profile, session }: { locale: Locale;
     {dialog ? <div className="account-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}><section className="account-dialog" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title"><button className="account-dialog-close" onClick={closeDialog} aria-label={zh ? "关闭" : "Close"}><X /></button>
       {dialog === "password" ? <form onSubmit={changePassphrase}><h2 id="account-dialog-title">{zh ? "修改本地解锁口令" : "Change local passphrase"}</h2><p>{zh ? "更新后，下次解锁此设备时请使用新口令。" : "Use the new passphrase next time you unlock this device."}</p><div className="dialog-fields"><PasswordField label={zh ? "当前口令" : "Current passphrase"} value={currentPassphrase} onChange={setCurrentPassphrase} visible={showPasswords} onToggle={() => setShowPasswords((value) => !value)} /><PasswordField label={zh ? "新口令" : "New passphrase"} value={newPassphrase} onChange={setNewPassphrase} visible={showPasswords} onToggle={() => setShowPasswords((value) => !value)} minLength={12} /><PasswordField label={zh ? "确认新口令" : "Confirm new passphrase"} value={confirmPassphrase} onChange={setConfirmPassphrase} visible={showPasswords} onToggle={() => setShowPasswords((value) => !value)} minLength={12} /><small>{zh ? "至少 12 个字符，建议使用不重复的长口令" : "At least 12 characters; use a unique long passphrase"}</small></div><footer><Button type="button" variant="secondary" onClick={closeDialog}>{zh ? "取消" : "Cancel"}</Button><Button type="submit">{zh ? "更新口令" : "Update passphrase"}</Button></footer></form> : null}
       {dialog === "recovery" ? <div><h2 id="account-dialog-title">{zh ? "管理恢复密钥" : "Manage recovery key"}</h2><p>{zh ? "恢复密钥可以在更换设备后恢复账户。请离线保存，不要发送给任何人。" : "This key can recover your account on a new device. Store it offline."}</p><code className="recovery-code">{profile.recoverySecret}</code><footer><Button variant="secondary" onClick={closeDialog}>{zh ? "完成" : "Done"}</Button><Button onClick={() => void navigator.clipboard.writeText(profile.recoverySecret)}><Copy />{zh ? "复制恢复密钥" : "Copy recovery key"}</Button></footer></div> : null}
-      {dialog === "device-qr" ? <div className="device-qr-dialog"><h2 id="account-dialog-title">{zh ? "在新设备上恢复" : "Recover on a new device"}</h2><p>{zh ? "用新设备的系统相机扫描。二维码包含你的恢复密钥，请勿截图、转发或让他人扫描。新设备打开后，敏感内容会立即从地址栏清除。" : "Scan with the new device's camera. This QR contains your recovery key—do not screenshot, forward, or let anyone else scan it. The new device removes the sensitive fragment from its address bar immediately."}</p>{deviceQr ? <img className="device-recovery-qr" src={deviceQr} alt={zh ? "新设备恢复二维码" : "New-device recovery QR code"} /> : <div className="device-qr-loading"><RefreshCw />{zh ? "正在安全生成…" : "Generating securely…"}</div>}<div className="dialog-warning"><ShieldCheck />{zh ? "二维码不会上传到服务器，由当前浏览器本地生成。" : "The QR is generated in this browser and is never uploaded."}</div><footer><Button variant="secondary" onClick={closeDialog}>{zh ? "完成" : "Done"}</Button></footer></div> : null}
+      {dialog === "device-pair-help" ? <div className="device-pair-help"><h2 id="account-dialog-title">{zh ? "安全连接新设备" : "Securely link a new device"}</h2><p>{zh ? "配对二维码由新设备生成，不包含恢复密钥，十分钟后自动失效。" : "The pairing QR is created by the new device, contains no recovery key, and expires after ten minutes."}</p><ol><li>{zh ? "在新设备打开 CoveChat，选择“从已登录设备安全配对”。" : "Open CoveChat on the new device and choose “Pair from a signed-in device”."}</li><li>{zh ? "使用当前设备的系统相机扫描新设备上的二维码。" : "Use this device's camera to scan the QR shown on the new device."}</li><li>{zh ? "返回 CoveChat 核对提示并点击“确认授权”。" : "Return to CoveChat, review the prompt, and approve the device."}</li></ol><div className="dialog-warning"><ShieldCheck />{zh ? "服务器只能中转临时密文，无法读取恢复资料。" : "The server only relays temporary ciphertext and cannot read recovery details."}</div><footer><Button onClick={closeDialog}>{zh ? "明白了" : "Got it"}</Button></footer></div> : null}
       {dialog === "devices" ? <div><h2 id="account-dialog-title">{zh ? "已授权设备" : "Authorized devices"}</h2><p>{zh ? "撤销不再使用或不认识的设备。设备内部标识默认隐藏。" : "Revoke devices you no longer use or recognize."}</p><div className="dialog-device-list">{activeDevices.map((device) => <div key={device.deviceId}><span><Monitor /></span><div><strong>{device.deviceId === profile.deviceId ? (zh ? "当前浏览器" : "Current browser") : (zh ? "其他授权设备" : "Authorized device")}</strong><small>{zh ? "授权于" : "Authorized"} {new Date(device.createdAt * 1000).toLocaleString(locale)}</small></div>{device.deviceId === profile.deviceId ? <span className="current-device-badge">{zh ? "当前" : "Current"}</span> : pendingDevice === device.deviceId ? <span className="device-confirm"><Button size="small" variant="secondary" onClick={() => setPendingDevice(null)}>{zh ? "取消" : "Cancel"}</Button><Button size="small" variant="danger" onClick={() => void removeDevice()}>{zh ? "确认撤销" : "Confirm"}</Button></span> : <Button size="small" variant="danger" onClick={() => setPendingDevice(device.deviceId)}>{zh ? "撤销" : "Revoke"}</Button>}</div>)}</div><footer><Button variant="secondary" onClick={closeDialog}>{zh ? "完成" : "Done"}</Button></footer></div> : null}
       {dialog === "clear" ? <div><h2 id="account-dialog-title">{zh ? "清除此设备的数据？" : "Clear this device's data?"}</h2><p>{zh ? "本浏览器中的密钥、消息和设置将被删除。请先确认恢复密钥已安全保存。" : "Local keys, messages and settings will be removed. Save your recovery key first."}</p><div className="dialog-warning"><Database />{zh ? "此操作仅影响当前浏览器，但无法撤销。" : "This only affects the current browser and cannot be undone."}</div><footer><Button variant="secondary" onClick={closeDialog}>{zh ? "取消" : "Cancel"}</Button><Button variant="danger" onClick={() => void clearLocalData()}>{zh ? "清除此设备" : "Clear this device"}</Button></footer></div> : null}
       {dialog === "delete" ? <div><h2 id="account-dialog-title">{zh ? "永久删除账户？" : "Permanently delete account?"}</h2><p>{zh ? "服务器账户、所有设备和加密数据都会永久删除，且无法恢复。" : "Your server account, devices and encrypted data will be permanently deleted."}</p><label className="delete-confirm">{zh ? <>输入用户名 <strong>{profile.username}</strong> 以确认</> : <>Type <strong>{profile.username}</strong> to confirm</>}<input autoFocus value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} /></label><footer><Button variant="secondary" onClick={closeDialog}>{zh ? "取消" : "Cancel"}</Button><Button variant="danger" disabled={deleteConfirmation !== profile.username} onClick={() => void deleteAccount()}>{zh ? "永久删除账户" : "Delete account"}</Button></footer></div> : null}

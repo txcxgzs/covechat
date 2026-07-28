@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { CheckCircle2, KeyRound, Languages, ShieldCheck } from "lucide-react";
+import type { AuthSession } from "@covechat/protocol";
+import { CheckCircle2, KeyRound, Languages, RefreshCw, ShieldCheck, Smartphone, X } from "lucide-react";
 import { copy, detectLocale, type Locale, type Translate } from "../i18n";
 import {
   createSecureProfile,
@@ -13,20 +14,39 @@ import {
 import {
   authenticateProfile,
   authenticateRecovery,
+  approveDeviceLink,
+  consumeDeviceLink,
   loadBackupForRecovery,
   publishSignalPreKeys,
   provisionProfile,
   registerRecoveredDevice,
   registerSessionRef,
   selfHealDeviceSignature,
+  startDeviceLink,
+  pollDeviceLink,
   unregisterSessionRef,
   uploadBackup,
   type AuthenticatedProfile,
 } from "./api";
 import { createEncryptedBackup, decryptBackup } from "./backup";
-import { parseDeviceRecoveryHash } from "./device-transfer";
+import {
+  buildDeviceApprovalUrl,
+  createDeviceLinkKeyPair,
+  decryptDeviceLinkPayload,
+  encryptDeviceLinkPayload,
+  parseDeviceApprovalHash,
+  parseDeviceRecoveryHash,
+  type DeviceLinkApproval,
+} from "./device-transfer";
 
-type GateState = "checking" | "setup" | "recover" | "unlock" | "recovery" | "ready";
+type GateState = "checking" | "setup" | "pair" | "recover" | "unlock" | "recovery" | "ready";
+
+type PairRequest = DeviceLinkApproval & {
+  requesterPrivateKey: string;
+  expiresAt: number;
+  qrDataUrl: string;
+  approvalUrl: string;
+};
 
 export function SecurityGate({ children }: {
   children: (authenticated: AuthenticatedProfile) => ReactNode;
@@ -41,11 +61,16 @@ export function SecurityGate({ children }: {
   const [recoverySecret, setRecoverySecret] = useState("");
   const [recoveryFromQr, setRecoveryFromQr] = useState(false);
   const [error, setError] = useState("");
+  const [pairRequest, setPairRequest] = useState<PairRequest>();
+  const [pendingApproval, setPendingApproval] = useState<DeviceLinkApproval>();
+  const [linkedSession, setLinkedSession] = useState<{ linkId: string; linkSecret: string }>();
+  const [pairLinkCopied, setPairLinkCopied] = useState(false);
   const t: Translate = (key) => copy[locale][key];
 
   useEffect(() => {
     const transfer = parseDeviceRecoveryHash(window.location.hash);
-    if (transfer) {
+    const approval = parseDeviceApprovalHash(window.location.hash);
+    if (transfer || approval) {
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
     }
     void hasLocalVault()
@@ -55,6 +80,7 @@ export function SecurityGate({ children }: {
           setRecoverySecret(transfer.recoverySecret);
           setRecoveryFromQr(true);
         }
+        if (approval && exists) setPendingApproval(approval);
         setState(transfer && !exists ? "recover" : exists ? "unlock" : "setup");
       })
       .catch(() => {
@@ -62,6 +88,52 @@ export function SecurityGate({ children }: {
         setState("setup");
       });
   }, []);
+
+  useEffect(() => {
+    if (state !== "pair" || !pairRequest) return;
+    let active = true;
+    let polling = false;
+    const poll = async () => {
+      if (polling || !active) return;
+      polling = true;
+      try {
+        const result = await pollDeviceLink(pairRequest.linkId, pairRequest.linkSecret);
+        if (
+          result.status === "approved"
+          && result.approverPublicKey
+          && result.encryptedPayload
+        ) {
+          const transfer = await decryptDeviceLinkPayload(
+            pairRequest.requesterPrivateKey,
+            result.approverPublicKey,
+            pairRequest.linkId,
+            result.encryptedPayload,
+          );
+          if (result.approvedUsername && result.approvedUsername !== transfer.username) {
+            throw new Error("device link account mismatch");
+          }
+          if (!active) return;
+          setUsername(transfer.username);
+          setRecoverySecret(transfer.recoverySecret);
+          setRecoveryFromQr(true);
+          setLinkedSession({ linkId: pairRequest.linkId, linkSecret: pairRequest.linkSecret });
+          setPairRequest(undefined);
+          setState("recover");
+        }
+      } catch {
+        if (active && Date.now() / 1000 >= pairRequest.expiresAt) {
+          setError(locale === "zh-CN" ? "配对已过期，请重新生成。" : "Pairing expired. Create a new request.");
+          setPairRequest(undefined);
+          setState("setup");
+        }
+      } finally {
+        polling = false;
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [locale, pairRequest, state]);
 
   function toggleLocale() {
     setLocale((current) => {
@@ -97,6 +169,30 @@ export function SecurityGate({ children }: {
       setError(t("vaultCreateFailed"));
       setPassphrase("");
       setConfirmation("");
+    }
+  }
+
+  async function beginDevicePairing() {
+    setError("");
+    setPairLinkCopied(false);
+    try {
+      const keys = await createDeviceLinkKeyPair();
+      const link = await startDeviceLink(keys.publicKey);
+      const approval: DeviceLinkApproval = {
+        version: 1,
+        linkId: link.linkId,
+        linkSecret: link.linkSecret,
+        requesterPublicKey: keys.publicKey,
+      };
+      const approvalUrl = buildDeviceApprovalUrl(window.location.origin, approval);
+      const qrDataUrl = await (await import("qrcode")).toDataURL(
+        approvalUrl,
+        { width: 320, margin: 2, errorCorrectionLevel: "M", color: { dark: "#0a2a42", light: "#ffffff" } },
+      );
+      setPairRequest({ ...approval, requesterPrivateKey: keys.privateKey, expiresAt: link.expiresAt, qrDataUrl, approvalUrl });
+      setState("pair");
+    } catch {
+      setError(locale === "zh-CN" ? "无法创建配对请求，请检查网络后重试。" : "Could not start pairing. Check the network and retry.");
     }
   }
 
@@ -137,6 +233,10 @@ export function SecurityGate({ children }: {
         await createEncryptedBackup(activeProfile, recoveryBackup.backup),
         session,
       );
+      if (linkedSession) {
+        await consumeDeviceLink(linkedSession.linkId, linkedSession.linkSecret).catch(() => undefined);
+        setLinkedSession(undefined);
+      }
       setProfile(activeProfile);
       setAuthenticated({ profile: activeProfile, session });
       setPassphrase("");
@@ -204,6 +304,13 @@ export function SecurityGate({ children }: {
   if (state === "ready" && authenticated) {
     return <SessionRegistrar authenticated={authenticated} onSessionRefresh={setAuthenticated}>
       {children(authenticated)}
+      {pendingApproval ? <DeviceLinkApprovalDialog
+        approval={pendingApproval}
+        profile={authenticated.profile}
+        session={authenticated.session}
+        locale={locale}
+        onClose={() => setPendingApproval(undefined)}
+      /> : null}
     </SessionRegistrar>;
   }
 
@@ -230,7 +337,21 @@ export function SecurityGate({ children }: {
             <button className="gate-secondary" onClick={() => setState("recover")}>
               {t("recoverExistingAccount")}
             </button>
+            <button className="gate-secondary gate-pair-button" onClick={() => void beginDevicePairing()}>
+              <Smartphone /> {locale === "zh-CN" ? "从已登录设备安全配对" : "Pair from a signed-in device"}
+            </button>
           </>
+        ) : null}
+        {state === "pair" && pairRequest ? (
+          <div className="gate-pair-state">
+            <Smartphone className="gate-symbol" />
+            <h1>{locale === "zh-CN" ? "连接这台新设备" : "Connect this new device"}</h1>
+            <p>{locale === "zh-CN" ? "使用已经登录 CoveChat 的设备扫描二维码并确认。恢复密钥不会出现在二维码中，请保持此页面打开。" : "Scan with a device already signed in to CoveChat and approve. The recovery key is not in this QR; keep this page open."}</p>
+            <img className="device-recovery-qr" src={pairRequest.qrDataUrl} alt={locale === "zh-CN" ? "一次性设备配对二维码" : "One-time device pairing QR"} />
+            <div className="gate-pair-waiting"><RefreshCw />{locale === "zh-CN" ? "等待另一台设备确认…" : "Waiting for approval…"}</div>
+            <button className="gate-secondary gate-copy-link" onClick={() => void navigator.clipboard.writeText(pairRequest.approvalUrl).then(() => setPairLinkCopied(true))}>{pairLinkCopied ? (locale === "zh-CN" ? "一次性链接已复制" : "One-time link copied") : (locale === "zh-CN" ? "无法扫码？复制一次性链接" : "Can't scan? Copy one-time link")}</button>
+            <button className="gate-secondary" onClick={() => { setPairRequest(undefined); setState("setup"); }}>{locale === "zh-CN" ? "取消配对" : "Cancel pairing"}</button>
+          </div>
         ) : null}
         {state === "recover" ? (
           <>
@@ -277,6 +398,51 @@ export function SecurityGate({ children }: {
       </section>
     </main>
   );
+}
+
+function DeviceLinkApprovalDialog({ approval, profile, session, locale, onClose }: {
+  approval: DeviceLinkApproval;
+  profile: SecureProfile;
+  session: AuthSession;
+  locale: Locale;
+  onClose: () => void;
+}) {
+  const [status, setStatus] = useState<"confirm" | "sending" | "done" | "error">("confirm");
+  const zh = locale === "zh-CN";
+
+  async function approve() {
+    setStatus("sending");
+    try {
+      const encrypted = await encryptDeviceLinkPayload(
+        approval.requesterPublicKey,
+        approval.linkId,
+        { version: 1, username: profile.username, recoverySecret: profile.recoverySecret },
+      );
+      await approveDeviceLink(
+        approval.linkId,
+        approval.linkSecret,
+        encrypted.approverPublicKey,
+        encrypted.encryptedPayload,
+        session,
+      );
+      setStatus("done");
+    } catch {
+      setStatus("error");
+    }
+  }
+
+  return <div className="account-dialog-backdrop"><section className="account-dialog device-link-approval" role="dialog" aria-modal="true" aria-labelledby="device-link-title">
+    <button className="account-dialog-close" onClick={onClose} aria-label={zh ? "关闭" : "Close"}><X /></button>
+    <span className={`dialog-symbol ${status === "done" ? "success-symbol" : ""}`}>{status === "done" ? <CheckCircle2 /> : <Smartphone />}</span>
+    <h2 id="device-link-title">{status === "done" ? (zh ? "新设备已获授权" : "New device approved") : (zh ? "授权一台新设备？" : "Approve a new device?")}</h2>
+    <p>{status === "done"
+      ? (zh ? "加密恢复资料已发送。新设备完成恢复后，这个一次性配对会自动销毁。" : "Encrypted recovery details were sent. This one-time link is destroyed after recovery.")
+      : (zh ? "只有当二维码正显示在你手边的新设备上时才确认。服务器只能中转密文，无法读取恢复密钥。" : "Approve only if the QR is visible on a new device in your possession. The server relays ciphertext and cannot read the recovery key.")}</p>
+    {status === "error" ? <p className="gate-error" role="alert">{zh ? "授权失败或配对已过期，请在新设备重新生成。" : "Approval failed or expired. Create a new request on the new device."}</p> : null}
+    <footer>
+      {status === "done" ? <button className="gate-submit" onClick={onClose}>{zh ? "完成" : "Done"}</button> : <><button className="gate-secondary" onClick={onClose}>{zh ? "拒绝" : "Deny"}</button><button className="gate-submit" disabled={status === "sending"} onClick={() => void approve()}>{status === "sending" ? (zh ? "正在加密发送…" : "Encrypting…") : (zh ? "确认授权" : "Approve device")}</button></>}
+    </footer>
+  </section></div>;
 }
 
 /**

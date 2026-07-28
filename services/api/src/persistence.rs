@@ -5,8 +5,8 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use super::{
-    AbuseReport, AccountIdentity, AttachmentChunk, AttachmentObject, DeviceRecord, EncryptedBackup,
-    EncryptedEnvelope, Store,
+    AbuseReport, AccountIdentity, AttachmentChunk, AttachmentObject, DeviceLink, DeviceRecord,
+    EncryptedBackup, EncryptedEnvelope, Store,
 };
 
 #[derive(Clone)]
@@ -491,6 +491,54 @@ impl Persistence {
         Ok(())
     }
 
+    pub async fn insert_device_link(&self, link: &DeviceLink) -> anyhow::Result<()> {
+        sqlx::query("INSERT INTO device_links (link_id, expires_at, payload) VALUES ($1, $2, $3)")
+            .bind(link.link_id)
+            .bind(link.expires_at as i64)
+            .bind(serde_json::to_value(link)?)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn read_device_link(&self, link_id: Uuid) -> anyhow::Result<Option<DeviceLink>> {
+        let row =
+            sqlx::query("SELECT payload FROM device_links WHERE link_id = $1 AND expires_at > $2")
+                .bind(link_id)
+                .bind(super::unix_now() as i64)
+                .fetch_optional(&self.pool)
+                .await?;
+        match row {
+            Some(value) => Ok(Some(serde_json::from_value(value.try_get("payload")?)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn update_device_link(&self, link: &DeviceLink) -> anyhow::Result<()> {
+        let result = sqlx::query(
+            "UPDATE device_links SET payload = $2
+             WHERE link_id = $1 AND expires_at > $3
+               AND payload->>'encryptedPayload' IS NULL",
+        )
+        .bind(link.link_id)
+        .bind(serde_json::to_value(link)?)
+        .bind(super::unix_now() as i64)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() != 1 {
+            anyhow::bail!("device link is missing or expired");
+        }
+        Ok(())
+    }
+
+    pub async fn delete_device_link(&self, link_id: Uuid) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM device_links WHERE link_id = $1")
+            .bind(link_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn update_device(&self, device: &DeviceRecord) -> anyhow::Result<()> {
         sqlx::query("UPDATE devices SET revoked_at = $2, payload = $3 WHERE device_id = $1")
             .bind(device.device_id)
@@ -717,6 +765,10 @@ impl Persistence {
             .execute(&mut *transaction)
             .await?;
         sqlx::query("DELETE FROM attachments WHERE expires_at <= $1")
+            .bind(now as i64)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("DELETE FROM device_links WHERE expires_at <= $1")
             .bind(now as i64)
             .execute(&mut *transaction)
             .await?;

@@ -114,6 +114,7 @@ struct Store {
     attachments: HashMap<Uuid, AttachmentObject>,
     abuse_reports: HashMap<Uuid, AbuseReport>,
     blocks: HashSet<(String, String)>,
+    device_links: HashMap<Uuid, DeviceLink>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +233,59 @@ struct Session {
 #[derive(Debug)]
 struct RecoverySession {
     username: String,
+    expires_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceLink {
+    protocol_version: u8,
+    link_id: Uuid,
+    secret_hash: String,
+    requester_public_key: String,
+    approved_username: Option<String>,
+    approver_public_key: Option<String>,
+    encrypted_payload: Option<String>,
+    expires_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StartDeviceLink {
+    protocol_version: u8,
+    requester_public_key: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartDeviceLinkResponse {
+    protocol_version: u8,
+    link_id: Uuid,
+    link_secret: String,
+    expires_at: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceLinkSecret {
+    link_secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApproveDeviceLink {
+    link_secret: String,
+    approver_public_key: String,
+    encrypted_payload: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceLinkStatus {
+    status: &'static str,
+    approved_username: Option<String>,
+    approver_public_key: Option<String>,
+    encrypted_payload: Option<String>,
     expires_at: u64,
 }
 
@@ -494,6 +548,16 @@ fn router(state: AppState) -> Router {
             get(read_latest_backup_with_recovery),
         )
         .route("/v1/recovery/devices", post(register_recovered_device))
+        .route("/v1/device-links", post(start_device_link))
+        .route("/v1/device-links/{link_id}/poll", post(poll_device_link))
+        .route(
+            "/v1/device-links/{link_id}/approve",
+            post(approve_device_link),
+        )
+        .route(
+            "/v1/device-links/{link_id}/consume",
+            post(consume_device_link),
+        )
         .route("/v1/directory/{username}", get(read_directory))
         .route("/v1/backups/latest", get(read_latest_backup))
         .route("/v1/backups", put(store_backup))
@@ -567,6 +631,211 @@ async fn health() -> Json<serde_json::Value> {
         "securityStatus": "experimental-unaudited",
         "plaintextAccepted": false
     }))
+}
+
+fn device_link_secret_hash(link_secret: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(link_secret.as_bytes()))
+}
+
+fn valid_device_link_key(value: &str) -> bool {
+    (32..=2048).contains(&value.len()) && serde_json::from_str::<serde_json::Value>(value).is_ok()
+}
+
+fn device_link_secret_matches(link: &DeviceLink, link_secret: &str) -> bool {
+    let candidate = device_link_secret_hash(link_secret);
+    candidate.len() == link.secret_hash.len()
+        && candidate
+            .as_bytes()
+            .ct_eq(link.secret_hash.as_bytes())
+            .unwrap_u8()
+            == 1
+}
+
+async fn read_device_link(state: &AppState, link_id: Uuid) -> Option<DeviceLink> {
+    if let Some(database) = &state.persistence {
+        let link = database.read_device_link(link_id).await.ok().flatten();
+        let mut store = state.inner.lock().await;
+        if let Some(value) = &link {
+            store.device_links.insert(link_id, value.clone());
+        } else {
+            store.device_links.remove(&link_id);
+        }
+        return link;
+    }
+    state.inner.lock().await.device_links.get(&link_id).cloned()
+}
+
+async fn start_device_link(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<StartDeviceLink>,
+) -> impl IntoResponse {
+    if input.protocol_version != PROTOCOL_VERSION
+        || !valid_device_link_key(&input.requester_public_key)
+    {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    if anonymous_rate_limit(&state, &headers, "device_link_start", 5, 3600)
+        .await
+        .is_err()
+    {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    let link_id = Uuid::new_v4();
+    let mut secret_bytes = [0_u8; 32];
+    if getrandom::fill(&mut secret_bytes).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    let link_secret = URL_SAFE_NO_PAD.encode(secret_bytes);
+    let expires_at = unix_now() + 10 * 60;
+    let link = DeviceLink {
+        protocol_version: PROTOCOL_VERSION,
+        link_id,
+        secret_hash: device_link_secret_hash(&link_secret),
+        requester_public_key: input.requester_public_key,
+        approved_username: None,
+        approver_public_key: None,
+        encrypted_payload: None,
+        expires_at,
+    };
+    if let Some(database) = &state.persistence
+        && database.insert_device_link(&link).await.is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    state.inner.lock().await.device_links.insert(link_id, link);
+    Json(StartDeviceLinkResponse {
+        protocol_version: PROTOCOL_VERSION,
+        link_id,
+        link_secret,
+        expires_at,
+    })
+    .into_response()
+}
+
+async fn poll_device_link(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(link_id): Path<Uuid>,
+    Json(input): Json<DeviceLinkSecret>,
+) -> impl IntoResponse {
+    if anonymous_rate_limit(&state, &headers, "device_link_poll", 180, 60)
+        .await
+        .is_err()
+    {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    let Some(link) = read_device_link(&state, link_id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if link.expires_at <= unix_now() {
+        return StatusCode::GONE.into_response();
+    }
+    if !device_link_secret_matches(&link, &input.link_secret) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    Json(DeviceLinkStatus {
+        status: if link.encrypted_payload.is_some() {
+            "approved"
+        } else {
+            "waiting"
+        },
+        approved_username: link.approved_username,
+        approver_public_key: link.approver_public_key,
+        encrypted_payload: link.encrypted_payload,
+        expires_at: link.expires_at,
+    })
+    .into_response()
+}
+
+async fn approve_device_link(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(link_id): Path<Uuid>,
+    Json(input): Json<ApproveDeviceLink>,
+) -> impl IntoResponse {
+    if authenticated_rate_limit(&state, &headers, "device_link_approve", 20, 3600)
+        .await
+        .is_err()
+    {
+        return StatusCode::TOO_MANY_REQUESTS;
+    }
+    let username = {
+        let mut store = state.inner.lock().await;
+        match authenticated_username(&headers, &mut store) {
+            Some(value) => value,
+            None => return StatusCode::UNAUTHORIZED,
+        }
+    };
+    if !valid_device_link_key(&input.approver_public_key)
+        || input.encrypted_payload.is_empty()
+        || input.encrypted_payload.len() > 64 * 1024
+    {
+        return StatusCode::BAD_REQUEST;
+    }
+    let Some(mut link) = read_device_link(&state, link_id).await else {
+        return StatusCode::NOT_FOUND;
+    };
+    if link.expires_at <= unix_now() {
+        return StatusCode::GONE;
+    }
+    if !device_link_secret_matches(&link, &input.link_secret) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    if link.encrypted_payload.is_some() {
+        return StatusCode::CONFLICT;
+    }
+    link.approved_username = Some(username);
+    link.approver_public_key = Some(input.approver_public_key);
+    link.encrypted_payload = Some(input.encrypted_payload);
+    if let Some(database) = &state.persistence {
+        if database.update_device_link(&link).await.is_err() {
+            return StatusCode::CONFLICT;
+        }
+    } else {
+        let mut store = state.inner.lock().await;
+        if store
+            .device_links
+            .get(&link_id)
+            .and_then(|current| current.encrypted_payload.as_ref())
+            .is_some()
+        {
+            return StatusCode::CONFLICT;
+        }
+        store.device_links.insert(link_id, link.clone());
+    }
+    state.inner.lock().await.device_links.insert(link_id, link);
+    StatusCode::NO_CONTENT
+}
+
+async fn consume_device_link(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(link_id): Path<Uuid>,
+    Json(input): Json<DeviceLinkSecret>,
+) -> StatusCode {
+    if anonymous_rate_limit(&state, &headers, "device_link_consume", 30, 60)
+        .await
+        .is_err()
+    {
+        return StatusCode::TOO_MANY_REQUESTS;
+    }
+    let Some(link) = read_device_link(&state, link_id).await else {
+        return StatusCode::NOT_FOUND;
+    };
+    if !device_link_secret_matches(&link, &input.link_secret) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    if link.encrypted_payload.is_none() {
+        return StatusCode::CONFLICT;
+    }
+    if let Some(database) = &state.persistence
+        && database.delete_device_link(link_id).await.is_err()
+    {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    state.inner.lock().await.device_links.remove(&link_id);
+    StatusCode::NO_CONTENT
 }
 
 fn authenticated_username(headers: &HeaderMap, store: &mut Store) -> Option<String> {
@@ -1095,7 +1364,7 @@ struct SetupInput {
 async fn setup_status(State(state): State<AppState>) -> Json<SetupStatus> {
     let origins = state.allowed_origins.read().await;
     Json(SetupStatus {
-        configured: !origins.is_empty(),
+        configured: !origins.is_empty() || !setup_is_required(),
         public_origin: origins.0.first().cloned(),
     })
 }
@@ -2549,6 +2818,7 @@ fn cleanup_once(store: &mut Store, now: u64) -> Vec<(Uuid, u32)> {
     store
         .attachments
         .retain(|_, attachment| attachment.expires_at > now);
+    store.device_links.retain(|_, link| link.expires_at > now);
     expired
 }
 
@@ -3730,6 +4000,84 @@ mod tests {
             HeaderValue::from_static("attacker-controlled-value"),
         );
         assert_eq!(rate_limit_subject(&headers), "anonymous");
+    }
+
+    #[test]
+    fn device_link_secret_is_constant_time_verified_and_not_stored_plaintext() {
+        let secret = "one-time-link-secret-that-is-long-enough";
+        let link = DeviceLink {
+            protocol_version: PROTOCOL_VERSION,
+            link_id: Uuid::new_v4(),
+            secret_hash: device_link_secret_hash(secret),
+            requester_public_key: r#"{"kty":"EC","crv":"P-256","x":"x","y":"y"}"#.into(),
+            approved_username: None,
+            approver_public_key: None,
+            encrypted_payload: None,
+            expires_at: unix_now() + 60,
+        };
+        assert!(device_link_secret_matches(&link, secret));
+        assert!(!device_link_secret_matches(
+            &link,
+            "wrong-secret-that-is-also-long-enough"
+        ));
+        assert_ne!(link.secret_hash, secret);
+    }
+
+    #[tokio::test]
+    async fn device_link_requires_authenticated_approval_and_is_consumed_once() {
+        let (state, headers, _) = authenticated_state("maya_chen");
+        let link_id = Uuid::new_v4();
+        let secret = "one-time-link-secret-that-is-long-enough";
+        state.inner.lock().await.device_links.insert(
+            link_id,
+            DeviceLink {
+                protocol_version: PROTOCOL_VERSION,
+                link_id,
+                secret_hash: device_link_secret_hash(secret),
+                requester_public_key:
+                    r#"{"kty":"EC","crv":"P-256","x":"requester-x","y":"requester-y"}"#.into(),
+                approved_username: None,
+                approver_public_key: None,
+                encrypted_payload: None,
+                expires_at: unix_now() + 60,
+            },
+        );
+        let status = approve_device_link(
+            State(state.clone()),
+            headers,
+            Path(link_id),
+            Json(ApproveDeviceLink {
+                link_secret: secret.into(),
+                approver_public_key:
+                    r#"{"kty":"EC","crv":"P-256","x":"approver-x","y":"approver-y"}"#.into(),
+                encrypted_payload: r#"{"version":1,"nonce":"opaque","ciphertext":"opaque"}"#.into(),
+            }),
+        )
+        .await;
+        assert_eq!(status.into_response().status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            state
+                .inner
+                .lock()
+                .await
+                .device_links
+                .get(&link_id)
+                .and_then(|link| link.approved_username.as_deref()),
+            Some("maya_chen")
+        );
+        assert_eq!(
+            consume_device_link(
+                State(state.clone()),
+                HeaderMap::new(),
+                Path(link_id),
+                Json(DeviceLinkSecret {
+                    link_secret: secret.into(),
+                }),
+            )
+            .await,
+            StatusCode::NO_CONTENT
+        );
+        assert!(!state.inner.lock().await.device_links.contains_key(&link_id));
     }
 
     // === read_directory 限流测试 ===

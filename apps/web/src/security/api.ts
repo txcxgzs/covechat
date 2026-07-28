@@ -238,6 +238,67 @@ function authenticatedHeaders(session: AuthSession): HeadersInit {
   return { authorization: `Bearer ${session.accessToken}` };
 }
 
+export type DeviceLinkSession = {
+  protocolVersion: 1;
+  linkId: string;
+  linkSecret: string;
+  expiresAt: number;
+};
+
+export type DeviceLinkStatus = {
+  status: "waiting" | "approved";
+  approvedUsername?: string;
+  approverPublicKey?: string;
+  encryptedPayload?: string;
+  expiresAt: number;
+};
+
+export async function startDeviceLink(requesterPublicKey: string): Promise<DeviceLinkSession> {
+  const response = await fetch("/api/v1/device-links", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ protocolVersion: 1, requesterPublicKey }),
+  });
+  if (!response.ok) throw new Error(`device link start failed: ${response.status}`);
+  return response.json() as Promise<DeviceLinkSession>;
+}
+
+export async function pollDeviceLink(linkId: string, linkSecret: string): Promise<DeviceLinkStatus> {
+  const response = await fetch(`/api/v1/device-links/${linkId}/poll`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ linkSecret }),
+  });
+  if (!response.ok) throw new Error(`device link poll failed: ${response.status}`);
+  return response.json() as Promise<DeviceLinkStatus>;
+}
+
+export async function approveDeviceLink(
+  linkId: string,
+  linkSecret: string,
+  approverPublicKey: string,
+  encryptedPayload: string,
+  session: AuthSession,
+): Promise<void> {
+  const response = await authenticatedFetch(`/api/v1/device-links/${linkId}/approve`, {
+    method: "POST",
+    headers: { ...authenticatedHeaders(session), "content-type": "application/json" },
+    body: JSON.stringify({ linkSecret, approverPublicKey, encryptedPayload }),
+  }, session);
+  if (!response.ok) throw new Error(`device link approval failed: ${response.status}`);
+}
+
+export async function consumeDeviceLink(linkId: string, linkSecret: string): Promise<void> {
+  const response = await fetch(`/api/v1/device-links/${linkId}/consume`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ linkSecret }),
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`device link consume failed: ${response.status}`);
+  }
+}
+
 export async function lookupDirectory(
   username: string,
   session: AuthSession,

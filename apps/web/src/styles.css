@@ -237,6 +237,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .gate-submit:hover { background: #087d7d; }
 .gate-secondary { width: 100%; border: 0; background: transparent; color: #0b6f75; padding: 12px; margin-top: 8px; font-weight: 700; }
 .gate-secondary:hover { text-decoration: underline; }
+.gate-pair-button { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 0; }
+.gate-pair-button svg { width: 18px; }
+.gate-pair-state { text-align: center; }
+.gate-pair-state > p { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.gate-pair-state .device-recovery-qr { width: min(292px, 72vw); margin-top: 16px; }
+.gate-pair-waiting { display: flex; align-items: center; justify-content: center; gap: 9px; color: #315b67; font-size: 12px; font-weight: 700; }
+.gate-pair-waiting svg { width: 17px; animation: spin 900ms linear infinite; }
 .gate-error { color: var(--warning); font-size: 12px; margin: 0; }
 .gate-qr-received { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; padding: 13px; border: 1px solid #bde0dc; border-radius: 12px; color: #155f62; background: #edf9f7; }
 .gate-qr-received > svg { width: 23px; color: var(--teal); }
@@ -538,6 +545,11 @@ body { overflow: hidden; background: #eef3f6; }
 .device-qr-loading { width: min(320px, 78vw); aspect-ratio: 1; margin: 8px auto 20px; display: grid; place-content: center; justify-items: center; gap: 12px; border: 1px dashed #b9d4d3; border-radius: 18px; color: var(--muted); background: #f5faf9; }
 .device-qr-loading svg { width: 26px; animation: spin 900ms linear infinite; }
 .device-qr-dialog .dialog-warning { text-align: left; }
+.device-pair-help ol { display: grid; gap: 12px; margin: 0 0 22px; padding-left: 22px; color: #294b5c; font-size: 13px; line-height: 1.55; }
+.device-link-approval .dialog-symbol { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 16px; border-radius: 15px; color: #0b7679; background: #e4f5f3; }
+.device-link-approval .dialog-symbol svg { width: 25px; }
+.device-link-approval .success-symbol { color: #16784b; background: #e5f7ed; }
+.device-link-approval footer .gate-submit, .device-link-approval footer .gate-secondary { width: auto; min-width: 118px; margin: 0; }
 .dialog-device-list { display: grid; border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
 .dialog-device-list > div { min-height: 66px; display: flex; align-items: center; gap: 12px; padding: 11px 13px; }
 .dialog-device-list > div + div { border-top: 1px solid var(--line); }
