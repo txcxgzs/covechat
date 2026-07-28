@@ -238,6 +238,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .gate-secondary { width: 100%; border: 0; background: transparent; color: #0b6f75; padding: 12px; margin-top: 8px; font-weight: 700; }
 .gate-secondary:hover { text-decoration: underline; }
 .gate-error { color: var(--warning); font-size: 12px; margin: 0; }
+.gate-qr-received { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; padding: 13px; border: 1px solid #bde0dc; border-radius: 12px; color: #155f62; background: #edf9f7; }
+.gate-qr-received > svg { width: 23px; color: var(--teal); }
+.gate-qr-received > span { min-width: 0; display: grid; gap: 2px; }
+.gate-qr-received strong { font-size: 13px; }
+.gate-qr-received small { overflow: hidden; color: #56737a; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.gate-qr-received button { border: 0; padding: 7px 9px; border-radius: 8px; color: #0b6f75; background: #dcefed; font-size: 11px; font-weight: 750; white-space: nowrap; }
 .deployment-panel { width: min(100%, 520px); }
 .deployment-hint { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .deployment-hint svg { width: 17px; flex: 0 0 auto; color: var(--teal); }

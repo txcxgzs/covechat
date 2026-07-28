@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { KeyRound, Languages, ShieldCheck } from "lucide-react";
+import { CheckCircle2, KeyRound, Languages, ShieldCheck } from "lucide-react";
 import { copy, detectLocale, type Locale, type Translate } from "../i18n";
 import {
   createSecureProfile,
@@ -39,6 +39,7 @@ export function SecurityGate({ children }: {
   const [passphrase, setPassphrase] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [recoverySecret, setRecoverySecret] = useState("");
+  const [recoveryFromQr, setRecoveryFromQr] = useState(false);
   const [error, setError] = useState("");
   const t: Translate = (key) => copy[locale][key];
 
@@ -52,6 +53,7 @@ export function SecurityGate({ children }: {
         if (transfer && !exists) {
           setUsername(transfer.username);
           setRecoverySecret(transfer.recoverySecret);
+          setRecoveryFromQr(true);
         }
         setState(transfer && !exists ? "recover" : exists ? "unlock" : "setup");
       })
@@ -236,8 +238,8 @@ export function SecurityGate({ children }: {
             <h1>{t("recoverAccountTitle")}</h1>
             <p>{t("recoverAccountBody")}</p>
             <form onSubmit={recover}>
-              <label>{t("username")}<input required minLength={3} maxLength={32} pattern="[a-z0-9_]+" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label>
-              <label>{t("recoveryCode")}<input required autoComplete="off" value={recoverySecret} onChange={(event) => setRecoverySecret(event.target.value)} /></label>
+              {!recoveryFromQr ? <label>{t("username")}<input required minLength={3} maxLength={32} pattern="[a-z0-9_]+" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} /></label> : null}
+              {recoveryFromQr ? <div className="gate-qr-received"><CheckCircle2 /><span><strong>{locale === "zh-CN" ? "恢复信息已安全读取" : "Recovery details received"}</strong><small>{locale === "zh-CN" ? `账户 @${username} · 密钥不会显示在页面中` : `Account @${username} · the key stays hidden`}</small></span><button type="button" onClick={() => { setRecoveryFromQr(false); setRecoverySecret(""); }}>{locale === "zh-CN" ? "改为手动输入" : "Enter manually"}</button></div> : <label>{t("recoveryCode")}<input required autoComplete="off" value={recoverySecret} onChange={(event) => setRecoverySecret(event.target.value)} /></label>}
               <label>{t("localPassphrase")}<input required minLength={12} type="password" autoComplete="new-password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} /></label>
               <label>{t("confirmPassphrase")}<input required minLength={12} type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>
               {error ? <p className="gate-error" role="alert">{error}</p> : null}
